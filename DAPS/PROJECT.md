@@ -229,6 +229,40 @@ ReSample 적용 시점: $T=200$ (Low noise) 시점은 이미 이미지가 거의
 - **높은 std 이미지**: img 7 (3.92), img 9 (2.85) → Phase retrieval의 multi-modal 특성 반영
 - **어려운 이미지**: img 8 (best=10.28) → 일부 이미지에서 성능 저하
 
+### [실험 1] Repulsion Sanity Check (2025-12-13)
+
+#### Exp0 vs Exp1 Sanity Check 비교 (1 Image)
+| Metric | Exp0 (Baseline) | Exp1 (Repulsion) | 차이 |
+|--------|-----------------|------------------|------|
+| PSNR samples | [8.46, 7.83, 8.44, 11.25] | [8.46, 7.82, 8.40, 11.24] | ~동일 |
+| **Best PSNR** | 11.25 | 11.24 | -0.01 |
+| Mean PSNR | 8.99 | 8.98 | -0.01 |
+| Std PSNR | 1.53 | 1.53 | 동일 |
+| Best SSIM | 0.565 | 0.565 | 동일 |
+| Best LPIPS | 0.495 | 0.495 | 동일 |
+| **Time** | 900초 | 910초 | +10초 (+1.1%) |
+| **Peak VRAM** | 10,117 MB | 10,209 MB | +92 MB (+0.9%) |
+
+#### Exp1 Repulsion 설정
+| Parameter | Value |
+|-----------|-------|
+| repulsion_scale | 0.1 |
+| repulsion_sigma_break | 1.0 |
+| repulsion_schedule | linear |
+| repulsion_dino_model | dino_vits16 |
+| repulsion_active_steps | 30/50 steps |
+| repulsion_total_time | 11.4초 |
+| mean_pairwise_distance | 32.13 |
+
+#### 관찰 및 분석
+- **PSNR 거의 동일**: repulsion이 켜졌음에도 결과가 baseline과 거의 같음
+- **가능한 원인**:
+  1. `repulsion_scale=0.1`이 너무 약할 수 있음 → scale 증가 실험 필요
+  2. 1 image만으로는 통계적 의미 부족 → 10 image 실험 필요
+  3. 같은 seed 사용으로 trajectory가 비슷하게 수렴했을 가능성
+- **Overhead 미미**: 시간 +1.1%, VRAM +0.9% → repulsion 연산 비용 낮음
+- **다음 단계**: `repulsion_scale` 조정 또는 10 image 실험으로 효과 검증 필요
+
 
 ## 프로젝트 기대 결과: 보다 적은 연산으로 비슷하거나 더 좋은 성능을!
 - DAPS에서 Phase Retrieval의 불안정성을 고려하여, 4번의 independent runs을 수행한 뒤 가장 좋은 결과를 선택하여 보고했으니, 우리플젝을 DAPS 4 run이랑 비교했을때 시간xGPU 사용량이 비슷하거나 작으면서 성능이 비슷하거나 높음을 보이면 되는 것!
