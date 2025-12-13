@@ -1,5 +1,13 @@
 # My Project: LatentDAPS로 Langevin Dynamics sampling + TDP-style 탐색으로 0° 180° 찾기 + 맨 마지막 hard data consistency 적용
 
+## TPU 서버 설정 가이드라인
+
+```bash
+echo 'export PJRT_DEVICE=TPU' >> ~/.bashrc
+echo 'export PJRT_SELECT_DEFAULT_DEVICE=1' >> ~/.bashrc
+source ~/.bashrc
+```
+
 ## 실험별 명령어
 
 ``` bash
@@ -74,6 +82,7 @@ python posterior_sample.py ... use_tpu=true
     1. `utils/device.py` 중앙화: 모든 TPU/CUDA 분기 로직을 한 곳에서 관리 (`get_device()`, `setup_device()`, `mark_step()` 등)
     2. `mark_step()` 자동 호출: `sampler.py`의 sampling loop 매 step 끝에서 호출 → TPU lazy execution 그래프 실행 (메모리 폭발 방지)
     3. 메모리 측정: TPU는 `xm.get_memory_info()`, CUDA는 `torch.cuda.max_memory_allocated()` 사용 → `metrics.json`의 `metadata.device`에 저장
+    4. **의존성 참고**: `torch_xla`는 `requirements.txt`에 미포함. TPU 서버에 PyTorch 2.x + XLA 2.x가 사전 설치되어 있음을 전제로 함. (JAX 사용 안 함, 순수 PyTorch 기반)
 
 ### [실험 1] 4-Particle Full Run (Repulsion vs. Independence)
 * 설정: 입자 4개, 처음부터 끝까지($T \to 0$) 유지.
