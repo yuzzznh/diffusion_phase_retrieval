@@ -156,19 +156,19 @@ class Evaluator:
         '''Display aggregated results from aggregate_results().'''
         table = Table('results')
 
-        # Get best values for each image
-        for key in result_dicts.keys():
+        # Get best values for each image (only for eval_fn keys, not metadata)
+        for key in self.eval_fn.keys():
             per_image = result_dicts[key]['per_image']
             best_values = ['{:.3f}'.format(r['best']) for r in per_image]
             table.add_column(key, best_values)
 
         # Add overall statistics
-        table.add_row(['' for _ in result_dicts.keys()])
-        table.add_row(['best_mean' for _ in result_dicts.keys()])
-        table.add_row(['{:.3f}'.format(result_dicts[key]['overall']['best_mean']) for key in result_dicts.keys()])
-        table.add_row(['' for _ in result_dicts.keys()])
-        table.add_row(['best_std' for _ in result_dicts.keys()])
-        table.add_row(['{:.3f}'.format(result_dicts[key]['overall']['best_std']) for key in result_dicts.keys()])
+        table.add_row(['' for _ in self.eval_fn.keys()])
+        table.add_row(['best_mean' for _ in self.eval_fn.keys()])
+        table.add_row(['{:.3f}'.format(result_dicts[key]['overall']['best_mean']) for key in self.eval_fn.keys()])
+        table.add_row(['' for _ in self.eval_fn.keys()])
+        table.add_row(['best_std' for _ in self.eval_fn.keys()])
+        table.add_row(['{:.3f}'.format(result_dicts[key]['overall']['best_std']) for key in self.eval_fn.keys()])
 
         return table.get_string()
 
@@ -183,7 +183,7 @@ class Evaluator:
 
     def log_wandb_aggregated(self, result_dicts, image_idx):
         '''Log per-image results to wandb.'''
-        for key in result_dicts.keys():
+        for key in self.eval_fn.keys():
             per_image = result_dicts[key]['per_image'][image_idx]
             log_dict = {
                 f'{key}_best': per_image['best'],
@@ -195,7 +195,7 @@ class Evaluator:
     def log_wandb_overall(self, result_dicts):
         '''Log overall statistics to wandb.'''
         log_dict = {}
-        for key in result_dicts.keys():
+        for key in self.eval_fn.keys():
             overall = result_dicts[key]['overall']
             log_dict[f'{key}_best_mean'] = overall['best_mean']
             log_dict[f'{key}_best_std'] = overall['best_std']

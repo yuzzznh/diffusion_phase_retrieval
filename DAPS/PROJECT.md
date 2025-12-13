@@ -41,7 +41,7 @@ sh download.sh
 # GPU (CUDA) 명령어 - commands_gpu/ 폴더
 # ============================================================
 # 실험 0
-bash commands_gpu/exp0_baseline.sh --1           # 1 image sanity check
+bash commands_gpu/exp0_baseline.sh --1           # 1 image sanity check -> A10에서 12292MiB 100% 15min.
 bash commands_gpu/exp0_baseline.sh --10          # 10 images
 bash commands_gpu/exp0_baseline.sh --100         # 100 images
 bash commands_gpu/exp0_baseline.sh --1 --10      # 1 + 10 images 순차 실행
@@ -56,26 +56,6 @@ bash commands_gpu/exp4_optimization.sh --1 --10 --100
 bash commands_gpu/exp5_final.sh --imagenet        # ImageNet 100
 bash commands_gpu/exp5_final.sh --ffhq            # FFHQ 100
 bash commands_gpu/exp5_final.sh --imagenet --ffhq # 둘 다
-
-# ============================================================
-# TPU (GCP TPU v3-8) 명령어 - commands_tpu/ 폴더
-# ============================================================
-# 실험 0
-bash commands_tpu/exp0_baseline.sh --1           # 1 image sanity check (12/14 12:48AM 시작 후 10분간 멈춰있었음)
-# Processing image 1/1   0%|                    | 0/50 [00:00<?, ?it/s]
-bash commands_tpu/exp0_baseline.sh --10          # 10 images
-bash commands_tpu/exp0_baseline.sh --100         # 100 images
-
-# 실험 1~4
-bash commands_tpu/exp1_repulsion.sh --1 --10 --100
-bash commands_tpu/exp2_pruning.sh --1 --10 --100
-bash commands_tpu/exp3_2particle.sh --10 --100
-bash commands_tpu/exp4_optimization.sh --1 --10 --100
-
-# 실험 5
-bash commands_tpu/exp5_final.sh --imagenet
-bash commands_tpu/exp5_final.sh --ffhq
-bash commands_tpu/exp5_final.sh --imagenet --ffhq
 
 # ============================================================
 # 인자 없이 실행하면 사용법 출력:

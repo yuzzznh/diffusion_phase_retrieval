@@ -181,3 +181,4 @@ docker-compose.override.yml
 *.pt
 *.pth
 *.ckpt
+.claude/*
