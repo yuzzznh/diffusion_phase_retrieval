@@ -200,12 +200,13 @@ class LatentDAPS(DAPS):
             # ============================================================
             # Gradient Toggle: 실험 1~5에서 필요한 gradient 계산 제어
             # ============================================================
+            # - MCMC sampler 내부의 operator.gradient()는 항상 gradient 계산 필요
+            # - Repulsion/Optimization은 별도 flag로 제어
+            # ============================================================
             # Repulsion: optimization_step 이전까지만 적용 (초반 탐색)
             do_repulsion = (self.repulsion_scale > 0) and (self.optimization_step < 0 or step < self.optimization_step)
             # Optimization: optimization_step 이후부터 적용 (후반 정밀화)
             do_optimization = (self.optimization_step >= 0) and (step >= self.optimization_step)
-            # 현재 step에서 gradient 필요 여부
-            step_needs_grad = do_repulsion or do_optimization
 
             # 1. reverse diffusion (항상 no_grad - 메모리 절약)
             with torch.no_grad():
@@ -214,9 +215,9 @@ class LatentDAPS(DAPS):
                 z0hat = sampler.sample(zt)
                 x0hat = model.decode(z0hat)
 
-            # 2. MCMC update (gradient toggle 적용)
-            with torch.set_grad_enabled(step_needs_grad):
-                # TODO [실험 1]: Repulsion 적용 시 z0y에 repulsive force 추가
+            # 2. MCMC update (항상 enable_grad - operator.gradient()가 data fitting gradient 계산)
+            with torch.enable_grad():
+                # TODO [실험 1]: Repulsion 적용 시 repulsive force 추가
                 # if do_repulsion:
                 #     repulsion_grad = self._compute_repulsion(zt, ...)
                 #     zt = zt - self.repulsion_scale * repulsion_grad

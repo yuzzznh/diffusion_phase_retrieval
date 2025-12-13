@@ -12,6 +12,10 @@
 
 set -e
 
+# TPU 환경변수 설정 (서브쉘에서도 동작하도록)
+export PJRT_DEVICE=TPU
+export PJRT_SELECT_DEFAULT_DEVICE=1
+
 # 인자 파싱
 RUN_10=false
 RUN_100=false

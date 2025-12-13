@@ -13,6 +13,10 @@
 
 set -e  # 에러 발생 시 중단
 
+# TPU 환경변수 설정 (서브쉘에서도 동작하도록)
+export PJRT_DEVICE=TPU
+export PJRT_SELECT_DEFAULT_DEVICE=1
+
 # 인자 파싱
 RUN_1=false
 RUN_10=false
