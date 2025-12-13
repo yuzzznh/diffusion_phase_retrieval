@@ -242,7 +242,7 @@ def main(args):
     # ============================================================
     # Memory Logging: 샘플링 시작 전 peak memory 초기화 (TPU/CUDA 공통)
     # ============================================================
-    reset_memory_stats(use_tpu=args.use_tpu)
+    reset_memory_stats(use_tpu=args.use_tpu, device=device)
 
     import time
     total_sampling_start_time = time.time()

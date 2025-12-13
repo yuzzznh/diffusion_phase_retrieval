@@ -83,12 +83,13 @@ def setup_device(use_tpu: bool, gpu_id: int = 0, seed: int = 42) -> torch.device
     return device
 
 
-def reset_memory_stats(use_tpu: bool) -> None:
+def reset_memory_stats(use_tpu: bool, device: torch.device = None) -> None:
     """
     Reset memory statistics for tracking peak usage.
 
     Args:
         use_tpu: True면 TPU, False면 CUDA
+        device: CUDA 사용 시 측정할 device (명시적 지정 권장)
     """
     if use_tpu:
         # TPU: xm.get_memory_info()는 누적이 아니라 현재 상태를 반환하므로
@@ -96,7 +97,7 @@ def reset_memory_stats(use_tpu: bool) -> None:
         pass
     else:
         if torch.cuda.is_available():
-            torch.cuda.reset_peak_memory_stats()
+            torch.cuda.reset_peak_memory_stats(device=device)
 
 
 def get_memory_stats(use_tpu: bool, device: torch.device = None) -> dict:
@@ -131,9 +132,9 @@ def get_memory_stats(use_tpu: bool, device: torch.device = None) -> dict:
     else:
         if torch.cuda.is_available():
             return {
-                'peak_mb': torch.cuda.max_memory_allocated() / (1024 ** 2),
-                'used_mb': torch.cuda.memory_allocated() / (1024 ** 2),
-                'reserved_mb': torch.cuda.memory_reserved() / (1024 ** 2),
+                'peak_mb': torch.cuda.max_memory_allocated(device=device) / (1024 ** 2),
+                'used_mb': torch.cuda.memory_allocated(device=device) / (1024 ** 2),
+                'reserved_mb': torch.cuda.memory_reserved(device=device) / (1024 ** 2),
                 'available': True,
                 'device_type': 'cuda'
             }
