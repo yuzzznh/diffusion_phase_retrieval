@@ -62,7 +62,7 @@ class ImageDataset(DiffusionData):
         Output data range   : [-1, 1]
     """
 
-    def __init__(self, root='dataset/demo', resolution=256, device='cuda', start_id=None, end_id=None):
+    def __init__(self, root='dataset/demo', resolution=256, device=None, start_id=None, end_id=None):
         # Define the file extensions to search for
         extensions = ['*.jpg', '*.JPG', '*.jpeg', '*.JPEG', '*.png', '*.PNG']
         self.data = [file for ext in extensions for file in Path(root).rglob(ext)]
@@ -98,12 +98,12 @@ class Empty(DiffusionData):
         Output data range   : [-1, 1]
     """
 
-    def __init__(self, shape, device='cuda'):
+    def __init__(self, shape, device=None):
         self.shape = shape
         self.device = device
 
     def __getitem__(self, i):
-        return torch.zeros(self.shape).cuda()
+        return torch.zeros(self.shape, device=self.device)
 
     def get_shape(self):
         return self.shape

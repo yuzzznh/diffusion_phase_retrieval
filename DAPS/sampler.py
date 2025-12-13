@@ -7,6 +7,7 @@ from cores.trajectory import Trajectory
 from cores.scheduler import get_diffusion_scheduler, DiffusionPFODE
 from cores.mcmc import MCMCSampler
 from forward_operator import LatentWrapper
+from utils import mark_step
 
 
 def get_sampler(**kwargs):
@@ -25,7 +26,7 @@ class DAPS(nn.Module):
     """
 
     def __init__(self, annealing_scheduler_config, diffusion_scheduler_config, mcmc_sampler_config,
-                 repulsion_scale=0.0, pruning_step=-1, optimization_step=-1):
+                 repulsion_scale=0.0, pruning_step=-1, optimization_step=-1, use_tpu=False):
         """
         Initializes the DAPS sampler with the provided scheduler and sampler configurations.
 
@@ -36,6 +37,7 @@ class DAPS(nn.Module):
             repulsion_scale (float): Initial strength of particle repulsion. 0.0 = independent (DAPS baseline).
             pruning_step (int): Timestep to perform pruning. -1 = no pruning.
             optimization_step (int): Timestep to start latent optimization. -1 = no optimization.
+            use_tpu (bool): True면 TPU 사용 (mark_step 호출), False면 CUDA 사용.
         """
         super().__init__()
         annealing_scheduler_config, diffusion_scheduler_config = self._check(annealing_scheduler_config,
@@ -48,6 +50,9 @@ class DAPS(nn.Module):
         self.repulsion_scale = repulsion_scale
         self.pruning_step = pruning_step
         self.optimization_step = optimization_step
+
+        # TPU/CUDA Flag
+        self.use_tpu = use_tpu
 
         # Gradient 필요 여부 (실험 0에서는 False)
         self.needs_grad = (repulsion_scale > 0) or (optimization_step >= 0)
@@ -108,6 +113,9 @@ class DAPS(nn.Module):
                     })
             if record:
                 self._record(xt, x0y, x0hat, sigma, x0hat_results, x0y_results)
+
+            # TPU: 매 step 끝에서 mark_step() 호출 (lazy execution 그래프 실행)
+            mark_step(self.use_tpu)
         return xt
 
     def _record(self, xt, x0y, x0hat, sigma, x0hat_results, x0y_results):
@@ -255,6 +263,9 @@ class LatentDAPS(DAPS):
             # Time Logging: step 종료 시간 기록
             step_end_time = time.time()
             per_step_times.append(step_end_time - step_start_time)
+
+            # TPU: 매 step 끝에서 mark_step() 호출 (lazy execution 그래프 실행)
+            mark_step(self.use_tpu)
 
         # Time Logging: 전체 샘플링 시간 및 통계 저장
         sampling_end_time = time.time()

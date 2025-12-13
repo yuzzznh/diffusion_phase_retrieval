@@ -21,6 +21,9 @@ import imageio
 
 import os
 
+# TPU/CUDA device utilities
+from utils import setup_device, reset_memory_stats, get_memory_stats
+
 
 def resize(y, x, task_name):
     """
@@ -178,37 +181,34 @@ def sample_per_image(sampler, model, operator, evaluator, image, measurement, nu
 
 @hydra.main(version_base='1.3', config_path='configs', config_name='default.yaml')
 def main(args):
-    # fix random seed
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
-    torch.backends.cudnn.deterministic = True
-    torch.cuda.set_device('cuda:{}'.format(args.gpu))
+    # Setup device (TPU or CUDA) and random seeds
+    device = setup_device(use_tpu=args.use_tpu, gpu_id=args.gpu, seed=args.seed)
 
     setproctitle.setproctitle(args.name)
     print(yaml.dump(OmegaConf.to_container(args, resolve=True), indent=4))
 
-    # get data
-    dataset = get_dataset(**args.data)
+    # get data (device 전달)
+    dataset = get_dataset(**args.data, device=device)
     total_number = len(dataset)
     images = dataset.get_data(total_number, 0)
 
-    # get operator & measurement
+    # get operator & measurement (device 전달)
     task_group = args.task[args.task_group]
-    operator = get_operator(**task_group.operator)
+    operator = get_operator(**task_group.operator, device=device)
     y = operator.measure(images)
 
-    # get sampler (실험 0~5 flag 전달)
+    # get sampler (실험 0~5 flag 및 TPU flag 전달)
     sampler = get_sampler(
         **args.sampler,
         mcmc_sampler_config=task_group.mcmc_sampler_config,
         repulsion_scale=args.repulsion_scale,
         pruning_step=args.pruning_step,
-        optimization_step=args.optimization_step
+        optimization_step=args.optimization_step,
+        use_tpu=args.use_tpu
     )
 
-    # get model
-    model = get_model(**args.model)
+    # get model (device 전달)
+    model = get_model(**args.model, device=device)
 
     # get evaluator
     eval_fn_list = []
@@ -240,10 +240,9 @@ def main(args):
     per_image_timing = []  # Time logging: 이미지별 timing 정보
 
     # ============================================================
-    # VRAM Logging: 샘플링 시작 전 peak memory 초기화
+    # Memory Logging: 샘플링 시작 전 peak memory 초기화 (TPU/CUDA 공통)
     # ============================================================
-    if torch.cuda.is_available():
-        torch.cuda.reset_peak_memory_stats()
+    reset_memory_stats(use_tpu=args.use_tpu)
 
     import time
     total_sampling_start_time = time.time()
@@ -286,15 +285,14 @@ def main(args):
     all_samples = torch.stack(all_samples, dim=0)
 
     # ============================================================
-    # Time & VRAM Logging: 샘플링 완료 후 측정
+    # Time & Memory Logging: 샘플링 완료 후 측정 (TPU/CUDA 공통)
     # ============================================================
     total_sampling_end_time = time.time()
     total_sampling_seconds = total_sampling_end_time - total_sampling_start_time
 
-    # VRAM Logging: peak memory 측정
-    peak_vram_mb = 0.0
-    if torch.cuda.is_available():
-        peak_vram_mb = torch.cuda.max_memory_allocated() / (1024 ** 2)  # MB 단위
+    # Memory Logging: peak memory 측정 (TPU/CUDA 공통)
+    memory_stats = get_memory_stats(use_tpu=args.use_tpu, device=device)
+    peak_memory_mb = memory_stats.get('peak_mb', 0.0)
 
     # Time Logging: 이미지별 timing 집계
     timing_summary = {}
@@ -315,7 +313,7 @@ def main(args):
     results = evaluator.aggregate_results(per_image_results)
 
     # ============================================================
-    # metrics.json에 metadata 추가 (timing, vram, hyperparameters)
+    # metrics.json에 metadata 추가 (timing, memory, hyperparameters)
     # ============================================================
     from datetime import datetime
     results['metadata'] = {
@@ -328,8 +326,10 @@ def main(args):
             'optimization_step': args.optimization_step,
         },
         'timing': timing_summary,
-        'gpu': {
-            'peak_vram_mb': peak_vram_mb,
+        'device': {
+            'type': 'tpu' if args.use_tpu else 'cuda',
+            'peak_memory_mb': peak_memory_mb,
+            **{k: v for k, v in memory_stats.items() if k != 'peak_mb'}  # 추가 메모리 정보
         }
     }
 
@@ -340,13 +340,14 @@ def main(args):
     json.dump(results, open(str(root / 'metrics.json'), 'w'), indent=4)
     print(markdown_text)
 
-    # Print timing and VRAM summary
-    print(f'\n=== Timing & VRAM Summary ===')
+    # Print timing and memory summary
+    print(f'\n=== Timing & Memory Summary ===')
+    print(f'Device: {"TPU" if args.use_tpu else "CUDA"}')
     print(f'Total sampling time: {total_sampling_seconds:.2f}s')
     if timing_summary:
         print(f'Mean per-image time: {timing_summary["mean_per_image_seconds"]:.2f}s')
         print(f'Mean per-step time: {timing_summary["mean_step_seconds"]*1000:.2f}ms')
-    print(f'Peak VRAM: {peak_vram_mb:.2f} MB')
+    print(f'Peak Memory: {peak_memory_mb:.2f} MB')
 
     if args.wandb:
         evaluator.log_wandb_overall(results)
@@ -390,11 +391,11 @@ def main(args):
             image_path = best_sample_dir / '{:05d}.png'.format(idx)
             pil_image_list[idx].save(str(image_path))
 
-        fake_dataset = get_dataset(args.data.name, resolution=args.data.resolution, root=str(best_sample_dir))
+        fake_dataset = get_dataset(args.data.name, resolution=args.data.resolution, root=str(best_sample_dir), device=device)
         real_loader = DataLoader(dataset, batch_size=100, shuffle=False)
         fake_loader = DataLoader(fake_dataset, batch_size=100, shuffle=False)
 
-        fid_score = calculate_fid(real_loader, fake_loader)
+        fid_score = calculate_fid(real_loader, fake_loader, device=device)
         print(f'FID Score: {fid_score.item():.4f}')
         with open(str(fid_dir / 'fid.txt'), 'w') as file:
             file.write(f'FID Score: {fid_score.item():.4f}')

@@ -107,11 +107,11 @@ class DDPM(DiffusionModel):
         model (VPPrecond): The neural network used for denoising.
 
     Methods:
-        __init__(self, model_config, device='cuda'): Initializes the DDPM object.
+        __init__(self, model_config, device=None): Initializes the DDPM object.
         tweedie(self, x, sigma): Applies the DDPM model to denoise the input, using VP preconditioning from EDM.
     """
 
-    def __init__(self, model_config, device='cuda', requires_grad=False):
+    def __init__(self, model_config, device=None, requires_grad=False):
         super().__init__()
         self.model = VPPrecond(model=create_model(**model_config), learn_sigma=model_config['learn_sigma'],
                                conditional=model_config['class_cond']).to(device)
@@ -140,9 +140,9 @@ class LDM(LatentDiffusionModel):
             Indicates whether the model is conditional or unconditional.
     """
 
-    def __init__(self, ldm_config, diffusion_path, device='cuda', requires_grad=False):
+    def __init__(self, ldm_config, diffusion_path, device=None, requires_grad=False):
         super().__init__()
-        self.net = LatentDMWrapper(load_model_from_config(ldm_config, diffusion_path)).to(device)
+        self.net = LatentDMWrapper(load_model_from_config(ldm_config, diffusion_path, device=device)).to(device)
         self.is_conditional = not (ldm_config.model.params.cond_stage_config == '__is_unconditional__')
         label_dim = 1 if self.is_conditional else 0
         self.model = VPPrecond(label_dim=label_dim, model=self.net, conditional=self.is_conditional).to(device)
@@ -186,14 +186,15 @@ def instantiate_from_config(config):
     return get_obj_from_str(config["target"])(**config.get("params", dict()))
 
 
-def load_model_from_config(config, ckpt, train=False):
+def load_model_from_config(config, ckpt, train=False, device=None):
     print(f"Loading model from {ckpt}")
-    pl_sd = torch.load(ckpt)  # , map_location="cpu")
+    pl_sd = torch.load(ckpt, map_location='cpu')  # CPU로 먼저 로드 후 device로 이동
     sd = pl_sd["state_dict"]
     model = instantiate_from_config(config.model)
     _, _ = model.load_state_dict(sd, strict=False)
 
-    model.cuda()
+    if device is not None:
+        model.to(device)
 
     if train:
         model.train()
@@ -214,7 +215,7 @@ class StableDiffusionModel(LatentDiffusionModel):
         unet (nn.Module): U-Net diffusion network for denoising.
         scheduler (VPScheduler): Scheduler for diffusion timesteps.
     """
-    def __init__(self, model_id = "stabilityai/stable-diffusion-2-1", inner_resolution=768, target_resolution=256, guidance_scale=7.5, prompt='a natural looking human face', device='cuda', hf_home='checkpoints/.cache/huggingface'):
+    def __init__(self, model_id = "stabilityai/stable-diffusion-2-1", inner_resolution=768, target_resolution=256, guidance_scale=7.5, prompt='a natural looking human face', device=None, hf_home='checkpoints/.cache/huggingface'):
         super().__init__()
         pipe = StableDiffusionPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
         self.pipe = pipe.to(device)

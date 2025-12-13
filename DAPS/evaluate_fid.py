@@ -15,7 +15,11 @@ def preprocess(images):
     return images.float()
 
 
-def calculate_fid(real_loader, generated_loader, device='cuda'):
+def calculate_fid(real_loader, generated_loader, device=None):
+    # Use default CUDA device if not specified
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
     # Load pretrained Inception model
     model = inception_v3(pretrained=True)
     model.fc = torch.nn.Identity()  # Modify the model to output features from the pre-logits layer

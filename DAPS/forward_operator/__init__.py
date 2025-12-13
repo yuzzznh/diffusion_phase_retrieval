@@ -116,7 +116,7 @@ class Operator(ABC):
 # Linear Operator
 @register_operator(name='down_sampling')
 class DownSampling(Operator):
-    def __init__(self, resolution=256, scale_factor=4, device='cuda', sigma=0.05):
+    def __init__(self, resolution=256, scale_factor=4, device=None, sigma=0.05):
         super().__init__(sigma)
         in_shape = [1, 3, resolution, resolution]
         self.down_sample = Resizer(in_shape, 1 / scale_factor).to(device)
@@ -201,7 +201,7 @@ class mask_generator:
 
 @register_operator(name='inpainting')
 class Inpainting(Operator):
-    def __init__(self, mask_type, mask_len_range=None, mask_prob_range=None, resolution=256, device='cuda',
+    def __init__(self, mask_type, mask_len_range=None, mask_prob_range=None, resolution=256, device=None,
                  sigma=0.05):
         super().__init__(sigma)
         self.mask_gen = mask_generator(mask_type, mask_len_range, mask_prob_range, resolution)
@@ -259,7 +259,7 @@ class Blurkernel(nn.Module):
 
 @register_operator(name='gaussian_blur')
 class GaussianBlur(Operator):
-    def __init__(self, kernel_size, intensity, device='cuda', sigma=0.05):
+    def __init__(self, kernel_size, intensity, device=None, sigma=0.05):
         super().__init__(sigma)
         self.device = device
         self.kernel_size = kernel_size
@@ -277,14 +277,14 @@ class GaussianBlur(Operator):
 
 @register_operator(name='motion_blur')
 class MotionBlur(Operator):
-    def __init__(self, kernel_size, intensity, device='cuda', sigma=0.05):
+    def __init__(self, kernel_size, intensity, device=None, sigma=0.05):
         super().__init__(sigma)
         self.device = device
         self.kernel_size = kernel_size
         self.conv = Blurkernel(blur_type='motion',
                                kernel_size=kernel_size,
                                std=intensity,
-                               device=device).to(device)  # should we keep this device term?
+                               device=device).to(device)
 
         self.kernel = Kernel(size=(kernel_size, kernel_size), intensity=intensity)
         kernel = torch.tensor(self.kernel.kernelMatrix, dtype=torch.float32)
@@ -299,9 +299,10 @@ class MotionBlur(Operator):
 # Non-linear Operator
 @register_operator(name='phase_retrieval')
 class PhaseRetrieval(Operator):
-    def __init__(self, oversample=0.0, resolution=256, sigma=0.05):
+    def __init__(self, oversample=0.0, resolution=256, sigma=0.05, device=None):
         super().__init__(sigma)
         self.pad = int((oversample / 8.0) * resolution)
+        self.device = device  # PhaseRetrieval은 device-agnostic하지만 인터페이스 통일을 위해 인자 받음
 
     def __call__(self, x):
         x = x * 0.5 + 0.5  # [-1, 1] -> [0, 1]
@@ -316,7 +317,7 @@ class PhaseRetrieval(Operator):
 
 @register_operator(name='nonlinear_blur')
 class NonlinearBlur(Operator):
-    def __init__(self, opt_yml_path, device='cuda', sigma=0.05):
+    def __init__(self, opt_yml_path, device=None, sigma=0.05):
         super().__init__(sigma)
         self.device = device
         self.blur_model = self.prepare_nonlinear_blur_model(opt_yml_path)
@@ -369,7 +370,7 @@ class NonlinearBlur(Operator):
 
 @register_operator(name='high_dynamic_range')
 class HighDynamicRange(Operator):
-    def __init__(self, device='cuda', scale=2, sigma=0.05):
+    def __init__(self, device=None, scale=2, sigma=0.05):
         super().__init__(sigma)
         self.device = device
         self.scale = scale
