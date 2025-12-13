@@ -1,39 +1,5 @@
 # My Project: LatentDAPS로 Langevin Dynamics sampling + TDP-style 탐색으로 0° 180° 찾기 + 맨 마지막 hard data consistency 적용
 
-## TPU 서버 설정 가이드라인
-
-서버 켜는 법 예시:
-```bash
-gcloud compute tpus tpu-vm create yujin_tpu \
-  --zone=us-west1-c \
-  --accelerator-type=v5litepod-4 \
-  --version=tpu-vm-pt-2.0
-```
-
-환경설정 방법 (GCP TPU VM):
-
-GCP TPU VM은 이미 최적화된 PyTorch + XLA가 시스템에 깔려있어서, 그냥 시스템 Python 쓰면 됨!
-
-```bash
-# 1. 환경변수 설정
-echo 'export PJRT_DEVICE=TPU' >> ~/.bashrc
-echo 'export PJRT_SELECT_DEFAULT_DEVICE=1' >> ~/.bashrc
-source ~/.bashrc
-
-# 2. 의존성 설치
-pip install -r requirements.txt
-
-# 3. 체크포인트 다운로드
-sh download.sh
-
-# 끝!
-```
-
-**삽질한 것 (불필요했음)**
-- Miniconda 설치
-- conda 환경 생성
-- torch-xla 따로 설치
-
 ## 실험별 명령어
 
 ``` bash
@@ -66,16 +32,6 @@ $ bash commands_gpu/exp0_baseline.sh
 # --10  : 10 images main experiment (이미지 0~9)
 # --90  : 90 images final eval (이미지 10~99, --10과 합쳐서 100개)
 
-# ============================================================
-# 직접 python 명령어 실행 시 TPU/CUDA 선택
-# ============================================================
-# CUDA (기본값)
-python posterior_sample.py ... use_tpu=false
-
-# TPU (GCP TPU v3-8)
-python posterior_sample.py ... use_tpu=true
-```
-
 ## 실험 진행 및 구현 과정 설계
 
 ### [데이터] imagenet 10장으로 method 비교, 마지막 eval은 ffhq imagenet 100장씩으로 하는걸 목표로, 여건 안되면 ffhq는 버리기 / 시드 고정 (이미 DAPS에서는 42)
@@ -85,11 +41,6 @@ python posterior_sample.py ... use_tpu=true
 - ~~time logging: diffusion timestep T를 구간개수로 하여 **timestep별 소요 시간**을 측정. 이후 실험에서 pruning/optimization 시점 전후 시간 비교에 활용. sanity check 차원에서 1 image 4 sample 명령어로 먼저 테스트할 것.~~ → **완료**: `sampler.py`의 `LatentDAPS.sample()`에서 step별 시간 측정 (`self.timing_info`에 저장), `posterior_sample.py`에서 이미지별 timing 집계 후 `metrics.json`에 저장.
 - ~~GPU VRAM logging: 실험 0에서는 phase 구분 없이 **전체 구간의 peak VRAM**만 측정. `torch.cuda.max_memory_allocated()` 활용.~~ → **완료**: `posterior_sample.py`에서 `torch.cuda.reset_peak_memory_stats()` 후 `torch.cuda.max_memory_allocated()` 측정, `metrics.json`의 `metadata.gpu.peak_vram_mb`에 저장. (phase별 구간 분리는 실험 2, 4에서 pruning/optimization 추가 시 구현)
 - ~~명령어 자동기록 메커니즘이 이미 있는걸로 아는데, 어떤 메커니즘인지 파악하고, 우리 실험 0~5의 각종 argument 세팅이 잘 기록되도록 코드를 수정할 것.~~ → **Hydra 기반 config 자동기록 확인 완료**: `posterior_sample.py`에서 `OmegaConf.to_container(args)`를 통해 모든 config가 merge된 최종 결과를 `results/<name>/config.yaml`에 자동 저장함. sh 명령어에서 override한 모든 argument가 기록됨.
-- **TPU 지원 구현 완료** (`use_tpu` flag): GCP TPU v3-8 (PyTorch XLA) 환경에서도 실행 가능하도록 코드 수정.
-    1. `utils/device.py` 중앙화: 모든 TPU/CUDA 분기 로직을 한 곳에서 관리 (`get_device()`, `setup_device()`, `mark_step()` 등)
-    2. `mark_step()` 자동 호출: `sampler.py`의 sampling loop 매 step 끝에서 호출 → TPU lazy execution 그래프 실행 (메모리 폭발 방지)
-    3. 메모리 측정: TPU는 `xm.get_memory_info()`, CUDA는 `torch.cuda.max_memory_allocated()` 사용 → `metrics.json`의 `metadata.device`에 저장
-    4. **의존성 참고**: `torch_xla`는 `requirements.txt`에 미포함. TPU 서버에 PyTorch 2.x + XLA 2.x가 사전 설치되어 있음을 전제로 함. (JAX 사용 안 함, 순수 PyTorch 기반)
 
 ### [실험 1] 4-Particle Full Run (Repulsion vs. Independence)
 * 설정: 입자 4개, 처음부터 끝까지($T \to 0$) 유지.
@@ -229,7 +180,7 @@ ReSample 적용 시점: $T=200$ (Low noise) 시점은 이미 이미지가 거의
     - `repulsion_scale` (float): 입자끼리 밀어내는 힘의 초기 강도. 0.0이면 독립 실행 (DAPS baseline), >0.0이면 서로 밀어냄
     - `pruning_step` (int): 가지치기 수행 timestep. -1이면 pruning 없음
     - `optimization_step` (int): latent optimization 시작 timestep. -1이면 optimization 없음
-    - `use_tpu` (bool): TPU 사용 여부. false면 CUDA, true면 GCP TPU v3-8 (PyTorch XLA) 사용. TPU 사용 시 `xm.mark_step()`이 매 sampling step마다 호출되어 lazy execution 그래프가 실행됨.
+    - `use_tpu` (bool): TPU 사용 여부.
     - (num_eval_images는 data config에서 제어)
 - 실험별 argument 세팅 가이드:
     Exp 0: Baseline (DAPS Replication)particle_num=4, repulsion_scale=0.0:이렇게 설정하면 4개의 입자가 서로 간섭하지 않으므로, DAPS 논문에서 "1개씩 4번 돌린 것(4 runs)"과 수학적으로 완전히 동일한 결과를 냅니다. (시드만 잘 제어된다면)이것이 우리의 Reference 성능이 됩니다.
@@ -238,13 +189,11 @@ ReSample 적용 시점: $T=200$ (Low noise) 시점은 이미 이미지가 거의
     Exp 4: Quality (Optimization)optimization_step=200:$t=1000 \to 201$까지는 Repulsion으로 탐색하고,$t=200 \to 0$부터는 Repulsion을 끄고(scale=0 강제 적용), Latent Optimization을 켭니다.목표: Exp 2보다 PSNR이 확실히 더 올라가는지 확인합니다.
 - metric.json에 phase별 time, gpu, optimization 횟수/시간을 기록할 것
 - metric.json을 Parsing하는 코드를 만들 것
-- 코드 실행을 통한 sanity check는 GPU/TPU가 달린 서버에서 진행할 예정! (로컬 맥북 X)
+- 코드 실행을 통한 sanity check는 GPU가 달린 서버에서 진행할 예정! (로컬 맥북 X)
 - TODO를 완료한 경우 이 PROJECT.md 파일에 취소선을 그어 표시할 것! 만약 논의 결과 md 설명보다 더 적합한 선택지가 있어서 실제 구현에 차이가 생긴 경우 PROJECT.md를 업데이트할 것!
 - git commit message는 한/영 혼용 가능, 실험 몇을 준비하고 있는지 명시, 한 줄 이내로 작성. commit은 vscode gui로만 진행
 - 현 폴더는 DAPS 레포를 베이스로 수정 중에 있으며, TDP 및 ReSample 관련 세부사항은 추후 해당 실험 구현 단계에서 추가 예정
 - ~~command 파일들에 새로운 argument들 반영 및 1/10/100 image용 command 추가~~ → **완료**: 폴더 구조:
     - `commands_gpu/`: GPU (CUDA) 전용 명령어 (use_tpu=false)
-    - `commands_tpu/`: TPU (PyTorch XLA) 전용 명령어 (use_tpu=true)
     - 각 폴더에 `exp0_baseline.sh` ~ `exp5_final.sh` 포함
     - 모든 command에 `repulsion_scale`, `pruning_step`, `optimization_step`, `data.end_id` 반영
-    - TPU 버전은 `gpu=0` 대신 `use_tpu=true`, save_dir/name에 `_tpu` suffix 추가
