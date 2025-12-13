@@ -61,7 +61,8 @@ bash commands_gpu/exp5_final.sh --imagenet --ffhq # 둘 다
 # TPU (GCP TPU v3-8) 명령어 - commands_tpu/ 폴더
 # ============================================================
 # 실험 0
-bash commands_tpu/exp0_baseline.sh --1           # 1 image sanity check
+bash commands_tpu/exp0_baseline.sh --1           # 1 image sanity check (12/14 12:48AM 시작 후 10분간 멈춰있었음)
+# Processing image 1/1   0%|                    | 0/50 [00:00<?, ?it/s]
 bash commands_tpu/exp0_baseline.sh --10          # 10 images
 bash commands_tpu/exp0_baseline.sh --100         # 100 images
 
