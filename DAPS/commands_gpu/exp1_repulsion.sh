@@ -1,8 +1,13 @@
 #!/bin/bash
 # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # [실험 1] 4-Particle Full Run (Repulsion vs. Independence)
-# 목표: Repulsion ON vs DAPS Baseline 비교
-# 확인 지표: Max PSNR, Std / Mode Coverage
+# 목표: Repulsion ON vs DAPS Baseline 비교 - RLSD style SVGD repulsion in DINO feature space
+# 확인 지표: Max PSNR, Std / Mode Coverage, Mean Pairwise Distance
+#
+# Repulsion Config:
+#   - repulsion_scale: 초기 repulsion 강도 (0.1 default, 튜닝 필요)
+#   - repulsion_sigma_break: 이 sigma 이하에서는 repulsion OFF (default: 1.0)
+#   - repulsion_schedule: 'linear' (sigma 감소에 따라 repulsion decay)
 #
 # 사용법: bash exp1_repulsion.sh [--1] [--10] [--90]
 #   --1   : 1 image sanity check (이미지 0, repulsion_scale 튜닝용)
@@ -35,11 +40,19 @@ if [ "$RUN_1" = false ] && [ "$RUN_10" = false ] && [ "$RUN_90" = false ]; then
 fi
 
 # ============================================================
+# Repulsion Hyperparameters (튜닝 대상)
+# ============================================================
+REPULSION_SCALE=0.1           # 초기 repulsion 강도
+REPULSION_SIGMA_BREAK=1.0     # sigma 이 값 이하에서 repulsion OFF
+REPULSION_SCHEDULE="linear"   # decay schedule: linear, cosine, constant
+
+# ============================================================
 # [실험 1] Sanity Check - 1 image
-# TODO: repulsion_scale 튜닝 후 값 변경
+# 목적: repulsion이 정상 작동하는지 확인, pairwise distance 증가 확인
 # ============================================================
 if [ "$RUN_1" = true ]; then
     echo "========== [실험 1] 1 image sanity check =========="
+    echo "Repulsion Config: scale=${REPULSION_SCALE}, sigma_break=${REPULSION_SIGMA_BREAK}, schedule=${REPULSION_SCHEDULE}"
     python posterior_sample.py \
     +data=test-imagenet \
     +model=imagenet256ldm \
@@ -50,7 +63,9 @@ if [ "$RUN_1" = true ]; then
     num_samples=4 \
     sampler.diffusion_scheduler_config.num_steps=2 \
     sampler.annealing_scheduler_config.num_steps=50 \
-    repulsion_scale=0.1 \
+    repulsion_scale=${REPULSION_SCALE} \
+    repulsion_sigma_break=${REPULSION_SIGMA_BREAK} \
+    repulsion_schedule=${REPULSION_SCHEDULE} \
     pruning_step=-1 \
     optimization_step=-1 \
     data.end_id=1 \
@@ -63,6 +78,7 @@ fi
 # ============================================================
 if [ "$RUN_10" = true ]; then
     echo "========== [실험 1] 10 images main experiment =========="
+    echo "Repulsion Config: scale=${REPULSION_SCALE}, sigma_break=${REPULSION_SIGMA_BREAK}, schedule=${REPULSION_SCHEDULE}"
     python posterior_sample.py \
     +data=test-imagenet \
     +model=imagenet256ldm \
@@ -73,7 +89,9 @@ if [ "$RUN_10" = true ]; then
     num_samples=4 \
     sampler.diffusion_scheduler_config.num_steps=2 \
     sampler.annealing_scheduler_config.num_steps=50 \
-    repulsion_scale=0.1 \
+    repulsion_scale=${REPULSION_SCALE} \
+    repulsion_sigma_break=${REPULSION_SIGMA_BREAK} \
+    repulsion_schedule=${REPULSION_SCHEDULE} \
     pruning_step=-1 \
     optimization_step=-1 \
     data.end_id=10 \
@@ -86,6 +104,7 @@ fi
 # ============================================================
 if [ "$RUN_90" = true ]; then
     echo "========== [실험 1] 90 images final eval (10~99) =========="
+    echo "Repulsion Config: scale=${REPULSION_SCALE}, sigma_break=${REPULSION_SIGMA_BREAK}, schedule=${REPULSION_SCHEDULE}"
     python posterior_sample.py \
     +data=test-imagenet \
     +model=imagenet256ldm \
@@ -96,7 +115,9 @@ if [ "$RUN_90" = true ]; then
     num_samples=4 \
     sampler.diffusion_scheduler_config.num_steps=2 \
     sampler.annealing_scheduler_config.num_steps=50 \
-    repulsion_scale=0.1 \
+    repulsion_scale=${REPULSION_SCALE} \
+    repulsion_sigma_break=${REPULSION_SIGMA_BREAK} \
+    repulsion_schedule=${REPULSION_SCHEDULE} \
     pruning_step=-1 \
     optimization_step=-1 \
     data.start_id=10 \

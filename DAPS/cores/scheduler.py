@@ -368,20 +368,80 @@ class DiffusionPFODE:
     Diffusion Probability Flow ODE (PF-ODE) for sampling and likelihood computation.
 
     Implements forward and reverse sampling based on diffusion models, using numerical ODE solvers.
+
+    Supports score-level repulsion injection for particle guidance (Exp 1/3):
+    - Use set_repulsion() to provide precomputed repulsion gradient before sampling
+    - The repulsion is added to score in derivative() computation
     """
     def __init__(self, model, scheduler, solver='euler'):
         self.model = model
         self.scheduler = scheduler
         self.solver = solver
         self.device = next(model.parameters()).device
-    
+
+        # Repulsion injection state (set by sampler before sample() call)
+        self._repulsion = None
+        self._repulsion_scale = 0.0
+
+    def set_repulsion(self, repulsion: 'torch.Tensor', scale: float = 1.0):
+        """
+        Set repulsion gradient for score-level injection.
+
+        This should be called before sample() when particle repulsion is active.
+        The repulsion is added to the score function in derivative().
+
+        Args:
+            repulsion: (B, C, H, W) precomputed repulsion gradient in latent space
+            scale: Scaling factor for repulsion (already includes schedule decay)
+
+        Note:
+            - Call clear_repulsion() after sampling to reset state
+            - If repulsion is None or scale is 0, no repulsion is applied
+        """
+        self._repulsion = repulsion
+        self._repulsion_scale = scale
+
+    def clear_repulsion(self):
+        """Clear repulsion state after sampling."""
+        self._repulsion = None
+        self._repulsion_scale = 0.0
+
     def derivative(self, xt, t):
+        """
+        Compute ODE drift for reverse diffusion.
+
+        Implements Eq. (4) from EDM paper with optional repulsion injection:
+            dx/dt = (ds/dt)/s * x - s * (dσ/dt) * σ * score(x/s; σ)
+
+        When repulsion is set, the modified score becomes:
+            score' = score + repulsion_scale * repulsion
+
+        This is equivalent to modifying the denoiser output by + γ σ² repulsion
+        (see PROJECT.md for derivation).
+
+        Args:
+            xt: Current state (B, C, H, W)
+            t: Current time
+
+        Returns:
+            Derivative dx/dt for ODE solver
+        """
         # refer to Eq. (4) in EDM paper (https://arxiv.org/abs/2206.00364)
         st = self.scheduler.get_scaling(t)
         dst = self.scheduler.get_scaling_derivative(t)
         sigma_t = self.scheduler.get_sigma(t)
         dsigma_t = self.scheduler.get_sigma_derivative(t)
-        return dst / st * xt - st * dsigma_t * sigma_t * self.model.score(xt/st, sigma=sigma_t)
+
+        # Compute base score from denoiser
+        score = self.model.score(xt/st, sigma=sigma_t)
+
+        # Score-level repulsion injection (Exp 1/3)
+        # score' = score + scale * repulsion
+        # This pushes particles apart in latent space while respecting the prior gradient
+        if self._repulsion is not None and self._repulsion_scale > 0:
+            score = score + self._repulsion_scale * self._repulsion
+
+        return dst / st * xt - st * dsigma_t * sigma_t * score
 
     def sample(self, xT, num_steps=None, return_traj=False, requires_grad=False):
         # reverse PF-ODE, from prior Gaussian to data

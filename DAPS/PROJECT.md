@@ -42,7 +42,36 @@ $ bash commands_gpu/exp0_baseline.sh
 - ~~GPU VRAM logging: 실험 0에서는 phase 구분 없이 **전체 구간의 peak VRAM**만 측정. `torch.cuda.max_memory_allocated()` 활용.~~ → **완료**: `posterior_sample.py`에서 `torch.cuda.reset_peak_memory_stats()` 후 `torch.cuda.max_memory_allocated()` 측정, `metrics.json`의 `metadata.gpu.peak_vram_mb`에 저장. (phase별 구간 분리는 실험 2, 4에서 pruning/optimization 추가 시 구현)
 - ~~명령어 자동기록 메커니즘이 이미 있는걸로 아는데, 어떤 메커니즘인지 파악하고, 우리 실험 0~5의 각종 argument 세팅이 잘 기록되도록 코드를 수정할 것.~~ → **Hydra 기반 config 자동기록 확인 완료**: `posterior_sample.py`에서 `OmegaConf.to_container(args)`를 통해 모든 config가 merge된 최종 결과를 `results/<name>/config.yaml`에 자동 저장함. sh 명령어에서 override한 모든 argument가 기록됨.
 
-### [실험 1] 4-Particle Full Run (Repulsion vs. Independence)
+### [실험 1] 4-Particle Full Run (Repulsion vs. Independence) → **구현 완료**
+
+#### Sampler 코드 분석 (준비)
+| 항목         | 이 코드                  |
+|--------------|--------------------------|
+| 파라미터화   | EDM σ (sigma)            |
+| 예측 타겟    | x₀-prediction (denoiser) |
+| ε-prediction | ❌ 아님                  |
+
+- Forward diffusion: `x_t = x_0 + σ·ε` (EDM 형태)
+- `DiffusionPFODE.derivative()`에서 `model.score()` 호출 → score = (D(x;σ) - x) / σ² 변환 사용
+- 변수명 `x0hat`, `z0hat`이 x₀ 예측임을 명시
+
+#### 구현 완료 사항 (RLSD → LatentDAPS 이식)
+- ~~`repulsion.py` 모듈 생성~~: **완료**
+  - `DinoFeatureExtractor`: DINO-ViT 모델 lazy loading 및 feature 추출
+  - `compute_repulsion_gradient()`: SVGD-style repulsion gradient 계산 (RBF kernel + median heuristic bandwidth)
+  - `RepulsionModule`: High-level repulsion 관리 (scale decay, metrics tracking)
+  - **N=2 버그 수정**: `h = median(dist)^2 / max(log(N), eps)` 사용 (RLSD의 `log(N-1)` 대신)
+- ~~`DiffusionPFODE` 수정~~: **완료**
+  - `set_repulsion(repulsion, scale)` 메서드 추가
+  - `derivative()`에서 score-level injection: `score' = score + scale * repulsion`
+- ~~`LatentDAPS.sample()` 수정~~: **완료**
+  - Repulsion module 초기화 및 각 annealing step에서 repulsion 계산
+  - pfode에 repulsion 전달 및 metrics 수집
+- ~~Config 업데이트~~: **완료**
+  - `repulsion_scale`, `repulsion_sigma_break`, `repulsion_schedule`, `repulsion_dino_model`
+- ~~Shell scripts 업데이트~~: **완료**
+  - `exp1_repulsion.sh`, `exp3_2particle.sh`에 새 repulsion 파라미터 반영
+
 * 설정: 입자 4개, 처음부터 끝까지($T \to 0$) 유지.
 * 비교: Ours (Repulsion ON) vs. DAPS Baseline (Repulsion OFF, Independent)
 * 확인할 지표:
@@ -197,3 +226,167 @@ ReSample 적용 시점: $T=200$ (Low noise) 시점은 이미 이미지가 거의
     - `commands_gpu/`: GPU (CUDA) 전용 명령어 (use_tpu=false)
     - 각 폴더에 `exp0_baseline.sh` ~ `exp5_final.sh` 포함
     - 모든 command에 `repulsion_scale`, `pruning_step`, `optimization_step`, `data.end_id` 반영
+
+
+
+
+
+안녕, 다음에 따라 “RLSD repulsion을 LatentDAPS(EDM σ + x₀-pred)로 score-level injection 방식으로 이식”하는 작업을 가장 안전하게 진행해주라.
+(pruning/optimization은 아직 제외, 이 문서에서 Exp1/3만 타겟)
+
+You have access to two local repos:
+	•	Repo DAPS (target): my modified LatentDAPS / DAPS codebase, I changed vanilla DAPS so please be aware that content's different from original DAPS repo. You can refer to this PROJECT.md for concrete implementation done and planned. Though the repo name is DAPS, I am interested in LatentDAPS setting only.
+	•	Repo RLSD (source): RLSD (Repulsive Latent Score Distillation) official repo
+	(Please ignore repo named 'DAPS_modified' since it's outdated.)
+
+Goal: implement particle repulsion for Exp1/Exp3 (full-run 4 or 2 particles, no pruning, no optimization) by porting RLSD’s repulsion module into LatentDAPS.
+
+Context / What we know (important)
+
+Target repo (LatentDAPS) uses:
+	•	EDM sigma parameterization (σ), not DDPM alpha. Evidence:
+	•	uses annealing_scheduler.sigma_steps[step]
+	•	forward diffusion like x_t = x0 + σ * ε
+	•	has sigma_max and prior_sigma
+	•	Prediction target is x0-prediction (denoiser), NOT eps-pred.
+	•	In DiffusionPFODE.derivative():
+		return dst / st * xt - st * dsigma_t * sigma_t * self.model.score(xt/st, sigma=sigma_t)
+	•	model.score() is derived from denoiser D(x;σ) via EDM relation:
+		score = (D(x;σ) - x) / σ^2
+
+We want repulsion injection method:
+
+Method to use: Add repulsion directly to score.
+Rationale:
+	•	Equivalent to modifying denoiser output by + γ σ^2 repulsion, but simpler:
+	•	If score = (D-x)/σ^2, then D' = D + γ σ^2 repulsion ⇒ score' = score + γ repulsion
+	•	Matches DAPS update form (prior gradient + data gradient). Repulsion is an extra regularizer/guidance term added to the “prior gradient direction”.
+	•	We will implement sampler-loop computed repulsion, store it in pfode, and add it in DiffusionPFODE.derivative():
+
+		# sampler loop
+		repulsion = compute_repulsion(zt)
+		pfode.set_repulsion(repulsion, scale=current_scale)
+
+		# DiffusionPFODE.derivative
+		score = self.model.score(...)
+		if self.repulsion is not None:
+			score = score + self.repulsion_scale * self.repulsion
+
+		do not wrap model, maintain sampler -> pfode passing structure for clarity in responsibility and on/off control and debuggability.
+
+Repulsion should be ON only for early/high-noise interval and decay to 0:
+	•	RLSD uses if sigma > sigma_break to enable repulsion.
+	•	We will implement interval on/off with alpha(σ) schedule (linear or cosine) such that alpha -> 0 as σ→0.
+	•	For now implement something simple: repulsion active for sigma > sigma_break, and within that, scale by alpha = repulsion_scale * schedule(sigma).
+
+RLSD repulsion reference implementation (source repo):
+
+RLSD repulsion core in rsd.py lines ~123-165 (already identified). It:
+	•	decodes latent to image
+	•	extracts DINO features
+	•	computes pairwise differences in feature space
+	•	uses RBF kernel with median heuristic bandwidth
+	•	computes SVGD-style repulsive gradient
+	•	backprops from feature space to latent using vector-Jacobian trick:
+		eval_sum = torch.sum(dino_out * grad_phi.detach())
+		deps_dx_backprop = torch.autograd.grad(eval_sum, latent_pred_t)[0]
+	•	normalizes by kernel sum
+
+⚠️ Important fix:
+RLSD code uses h = median(dist)^2 / log(N-1). This breaks for N=2 (log(1)=0) which is our project's Exp3 setting.
+We will use a safe denominator: log(N) (or max(log(N), eps)) so that Exp3 (2 particles) works.
+
+Deliverables / Tasks
+
+Task 1: Identify integration points in LatentDAPS (target repo)
+
+Find where:
+	•	multiple particles are represented as a batch (num_samples already exists)
+	•	sampler loop produces the latent state zt (or equivalent) each step
+	•	pfode (DiffusionPFODE) is called for derivative or stepping
+
+We need:
+	1.	A function to compute repulsion given current latent batch.
+	2.	Store repulsion in pfode (or scheduler) object so derivative() can access it.
+	3.	Add repulsion to score in DiffusionPFODE.derivative() before it’s used in drift.
+
+Task 2: Port RLSD repulsion computation into target repo
+
+Implement something like:
+
+repulsion = compute_repulsion(latents, sigma_t)
+
+	•	Use RLSD’s DINO-based feature space repulsion.
+	•	Use decode_latents(latents) from target repo (or equivalent) to get images.
+	•	Use DINO-ViT model (frozen, eval mode).
+	•	Ensure gradients flow back to latent: need latent.requires_grad_(True) in repulsion-on steps.
+	•	Use vector-Jacobian trick like RLSD (avoid second-order).
+	•	Bandwidth: median(dist)^2 / max(log(N), eps)
+	•	compute pairwise distances
+	•	h = median(dist)**2 / max(log(N), eps)  ✅ (fix N=2)
+	•	Normalize by kernel sum similarly.
+
+Task 3: Add config options (minimal)
+
+Expose in config / args:
+	•	repulsion_scale (float, default 0.0)
+	•	sigma_break or repulsion_sigma_break (float or step index)
+	•	optional repulsion_schedule (linear default)
+
+Repulsion behavior:
+	•	If repulsion_scale == 0, it must exactly reproduce DAPS baseline (independent chains).
+	•	If on, only apply when sigma > sigma_break.
+
+Task 4: Ensure correct grad toggling and memory safety
+	•	Only enable autograd for repulsion steps.
+	•	DINO parameters must have requires_grad=False, but input must require grad.
+	•	DINO input should be resized to 224 (if RLSD does). Use same preprocessing as RLSD repo. But be aware that the input images' resolutions are different; DAPS handles 256x256 while RLSD handles 512x512 and latent resolution may be different across two repos. Adjust accordingly and tell me what you did. Ask me if any uncertainty. Place debugging code if needed and tell me that there are debugging code I have to check the outputs.
+
+Task 5: Logging for sanity (Exp1/3)
+
+Add to metrics/logging:
+	•	mean pairwise DINO feature distance per step
+	•	whether repulsion was on/off
+	•	optionally norm of repulsion gradient
+	•	time per repulsion computation
+Be aware of the bugs resulting from new logging terms.
+
+This is crucial to verify repulsion is actually acting.
+
+Task 6: Provide a minimal test run plan - note that each sanity test may take 15+ minutes.
+	•	run 1 image sanity with 4 particles, repulsion on; check:
+	•	pairwise distance increases early
+	•	later decreases/stabilizes when repulsion off/decayed
+	•	no NaNs
+	•	run 1 image sanity with 2 particles; ensure no crash (bandwidth fix works).
+
+Implementation guidance (preferred architecture)
+
+Do NOT wrap/modify model.score() logic deeply. Keep responsibilities separated:
+	•	sampler computes repulsion and sets it on pfode each step:
+		pfode.set_repulsion(repulsion, scale=alpha_sigma)
+	•	pfode’s derivative() adds it:
+		score = score + self.repulsion_scale * self.repulsion
+구조:
+	•	sampler: “언제/얼마나 repulsion”
+	•	model: “순수 denoising”
+	•	pfode: “ODE drift 계산”
+
+This allows easy on/off scheduling and debugging.
+
+Output requirements
+	•	Make a clean PR-style change:
+	•	new module file for repulsion (e.g., repulsion.py)
+	•	minimal changes in sampler loop and pfode derivative
+	•	config updated, especially for exp1/3 sh commands file! and other files too; turn off repulsion option for baseline exp0.
+	•	Summarize:
+	•	files changed
+	•	key design decisions
+	•	how to run Exp1/Exp3
+	•	any assumptions or TODOs
+
+Please proceed by:
+	1.	scanning target repo to find exact insertion points and existing decoding utilities
+	2.	mapping RLSD code dependencies (DINO loading, preprocessing, additionally required env setting: pip requirements, download sh, etc.)
+	3.	implementing and testing quickly with 1-image run (if any additional installation or download is needed, do so, and document it inside DAPS requirements and download scripts)
+	4.	report back with patch summary and instructions.

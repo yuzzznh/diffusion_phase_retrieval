@@ -202,6 +202,9 @@ def main(args):
         **args.sampler,
         mcmc_sampler_config=task_group.mcmc_sampler_config,
         repulsion_scale=args.repulsion_scale,
+        repulsion_sigma_break=args.repulsion_sigma_break,
+        repulsion_schedule=args.repulsion_schedule,
+        repulsion_dino_model=args.repulsion_dino_model,
         pruning_step=args.pruning_step,
         optimization_step=args.optimization_step,
         use_tpu=args.use_tpu
@@ -269,6 +272,13 @@ def main(args):
         if hasattr(sampler, 'timing_info'):
             per_image_timing.append(sampler.timing_info.copy())
 
+        # Repulsion logging: sampler의 repulsion_info 수집 (Exp 1/3)
+        if hasattr(sampler, 'repulsion_info') and sampler.repulsion_info.get('repulsion_enabled', False):
+            if img_idx == 0:  # 첫 이미지에서만 summary 출력
+                rep_info = sampler.repulsion_info
+                print(f'  [Repulsion] active_steps={rep_info.get("repulsion_active_steps", 0)}, '
+                      f'total_time={rep_info.get("repulsion_total_time_seconds", 0):.2f}s')
+
         # Log per-image metrics
         main_metric = evaluator.main_eval_fn_name
         print(f'  Image {img_idx}: {main_metric} best={per_image_result[main_metric]["best"]:.3f}, '
@@ -313,18 +323,31 @@ def main(args):
     results = evaluator.aggregate_results(per_image_results)
 
     # ============================================================
-    # metrics.json에 metadata 추가 (timing, memory, hyperparameters)
+    # metrics.json에 metadata 추가 (timing, memory, hyperparameters, repulsion)
     # ============================================================
     from datetime import datetime
+
+    # Repulsion summary (Exp 1/3)
+    repulsion_summary = {}
+    if hasattr(sampler, 'repulsion_info'):
+        repulsion_summary = {
+            k: v for k, v in sampler.repulsion_info.items()
+            if k != 'step_details'  # step_details는 너무 길어서 제외
+        }
+
     results['metadata'] = {
         'timestamp': datetime.now().isoformat(),
         'num_images': total_number,
         'num_samples': num_samples,
         'hyperparameters': {
             'repulsion_scale': args.repulsion_scale,
+            'repulsion_sigma_break': args.repulsion_sigma_break,
+            'repulsion_schedule': args.repulsion_schedule,
+            'repulsion_dino_model': args.repulsion_dino_model,
             'pruning_step': args.pruning_step,
             'optimization_step': args.optimization_step,
         },
+        'repulsion': repulsion_summary,
         'timing': timing_summary,
         'device': {
             'type': 'tpu' if args.use_tpu else 'cuda',

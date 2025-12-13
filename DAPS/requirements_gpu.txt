@@ -60,3 +60,11 @@ einops==0.8.1
 kornia==0.7.3
 gdown==5.2.0
 -e git+https://github.com/openai/CLIP.git@main#egg=clip
+
+# ============================================================
+# DINO for Particle Repulsion (Exp 1/3)
+# ============================================================
+# DINO is loaded via torch.hub.load('facebookresearch/dino:main', 'dino_vits16')
+# No additional pip package required - model is auto-downloaded on first use.
+# Requires internet connection for first download (~300MB).
+# Model cache location: ~/.cache/torch/hub/facebookresearch_dino_main/

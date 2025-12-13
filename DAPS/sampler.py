@@ -8,6 +8,7 @@ from cores.scheduler import get_diffusion_scheduler, DiffusionPFODE
 from cores.mcmc import MCMCSampler
 from forward_operator import LatentWrapper
 from utils import mark_step
+from repulsion import RepulsionModule, RepulsionConfig
 
 
 def get_sampler(**kwargs):
@@ -160,11 +161,60 @@ class LatentDAPS(DAPS):
     """
     Latent Decoupled Annealing Posterior Sampling (LatentDAPS).
 
-    Implements posterior sampling using a latent diffusion model combined with MCMC updates
+    Implements posterior sampling using a latent diffusion model combined with MCMC updates.
+
+    Supports particle repulsion (Exp 1/3) via score-level injection:
+    - When repulsion_scale > 0, particles repel each other in DINO feature space
+    - Repulsion is active when sigma > sigma_break and decays according to schedule
     """
+
+    def __init__(self, annealing_scheduler_config, diffusion_scheduler_config, mcmc_sampler_config,
+                 repulsion_scale=0.0, repulsion_sigma_break=20.0, repulsion_schedule='linear',
+                 repulsion_dino_model='dino_vits16',
+                 pruning_step=-1, optimization_step=-1, use_tpu=False):
+        """
+        Initialize LatentDAPS with repulsion support.
+
+        Args:
+            annealing_scheduler_config: Config for annealing scheduler
+            diffusion_scheduler_config: Config for diffusion scheduler
+            mcmc_sampler_config: Config for MCMC sampler
+            repulsion_scale: Initial repulsion strength (0 = disabled, DAPS baseline)
+            repulsion_sigma_break: Sigma threshold below which repulsion is disabled
+            repulsion_schedule: Decay schedule ('linear', 'cosine', 'constant')
+            repulsion_dino_model: DINO model variant for feature extraction
+            pruning_step: Timestep for pruning (-1 = disabled)
+            optimization_step: Timestep to start optimization (-1 = disabled)
+            use_tpu: Whether to use TPU
+        """
+        super().__init__(
+            annealing_scheduler_config=annealing_scheduler_config,
+            diffusion_scheduler_config=diffusion_scheduler_config,
+            mcmc_sampler_config=mcmc_sampler_config,
+            repulsion_scale=repulsion_scale,
+            pruning_step=pruning_step,
+            optimization_step=optimization_step,
+            use_tpu=use_tpu,
+        )
+
+        # Repulsion configuration (Exp 1/3)
+        self.repulsion_config = RepulsionConfig(
+            scale=repulsion_scale,
+            sigma_break=repulsion_sigma_break,
+            schedule=repulsion_schedule,
+            dino_model=repulsion_dino_model,
+        )
+
+        # Repulsion module will be initialized lazily in sample()
+        self._repulsion_module = None
+
     def sample(self, model, z_start, operator, measurement, evaluator=None, record=False, verbose=False, **kwargs):
         """
         Performs sampling using LatentDAPS in latent space, decoding intermediate results.
+
+        Supports particle repulsion (Exp 1/3) via score-level injection:
+        - Repulsion is computed at each step when active
+        - Repulsion gradient is injected into the ODE derivative via pfode.set_repulsion()
 
         Args:
             model (LatentDiffusionModel): Latent diffusion model.
@@ -192,36 +242,82 @@ class LatentDAPS(DAPS):
         per_step_times = []  # 각 step별 소요 시간 (초)
         sampling_start_time = time.time()
 
+        # ============================================================
+        # Repulsion Module Initialization (Exp 1/3)
+        # ============================================================
+        sigma_max = self.annealing_scheduler.sigma_steps[0].item()  # First (largest) sigma
+        if self.repulsion_config.scale > 0:
+            device = z_start.device
+            if self._repulsion_module is None:
+                self._repulsion_module = RepulsionModule(self.repulsion_config, device)
+            self._repulsion_module.reset_metrics()
+            if verbose:
+                print(f"[Repulsion] Enabled with scale={self.repulsion_config.scale}, "
+                      f"sigma_break={self.repulsion_config.sigma_break}, schedule={self.repulsion_config.schedule}")
+
+        # Repulsion metrics for logging
+        repulsion_step_info = []
+
         zt = z_start
         for step in pbar:
             step_start_time = time.time()
             sigma = self.annealing_scheduler.sigma_steps[step]
+            sigma_val = sigma.item() if hasattr(sigma, 'item') else float(sigma)
 
             # ============================================================
             # Gradient Toggle: 실험 1~5에서 필요한 gradient 계산 제어
             # ============================================================
-            # - MCMC sampler 내부의 operator.gradient()는 항상 gradient 계산 필요
-            # - Repulsion/Optimization은 별도 flag로 제어
-            # ============================================================
             # Repulsion: optimization_step 이전까지만 적용 (초반 탐색)
             do_repulsion = (self.repulsion_scale > 0) and (self.optimization_step < 0 or step < self.optimization_step)
+            # Check if repulsion is active at this sigma level
+            repulsion_active = do_repulsion and self._repulsion_module is not None and \
+                               self._repulsion_module.is_active(sigma_val, sigma_max)
             # Optimization: optimization_step 이후부터 적용 (후반 정밀화)
             do_optimization = (self.optimization_step >= 0) and (step >= self.optimization_step)
 
-            # 1. reverse diffusion (항상 no_grad - 메모리 절약)
+            # ============================================================
+            # [실험 1/3] Compute Repulsion Gradient
+            # ============================================================
+            repulsion_grad = None
+            repulsion_scale = 0.0
+            step_repulsion_info = {'step': step, 'sigma': sigma_val, 'repulsion_active': False}
+
+            if repulsion_active:
+                # Compute repulsion gradient in DINO feature space
+                # This requires gradient computation for backprop from DINO to latent
+                with torch.enable_grad():
+                    repulsion_grad, rep_info = self._repulsion_module.compute(
+                        latents=zt,
+                        decode_fn=model.decode,
+                        sigma=sigma_val,
+                        sigma_max=sigma_max,
+                    )
+                    repulsion_scale = rep_info.get('repulsion_scale', 0.0)
+                    step_repulsion_info.update(rep_info)
+                    repulsion_step_info.append(step_repulsion_info)
+
+                    # DEBUG: Log repulsion info at intervals
+                    if verbose and step % 10 == 0:
+                        print(f"[Repulsion] step={step}, sigma={sigma_val:.2f}, "
+                              f"scale={repulsion_scale:.4f}, "
+                              f"mean_dist={rep_info.get('mean_pairwise_distance', 0):.4f}, "
+                              f"grad_norm={rep_info.get('repulsion_grad_norm', 0):.4f}")
+
+            # 1. reverse diffusion with repulsion injection
             with torch.no_grad():
                 diffusion_scheduler = get_diffusion_scheduler(**self.diffusion_scheduler_config, sigma_max=sigma)
-                sampler = DiffusionPFODE(model, diffusion_scheduler, solver='euler')
-                z0hat = sampler.sample(zt)
+                pfode = DiffusionPFODE(model, diffusion_scheduler, solver='euler')
+
+                # Inject repulsion into score if active
+                if repulsion_grad is not None and repulsion_scale > 0:
+                    pfode.set_repulsion(repulsion_grad.detach(), scale=repulsion_scale)
+
+                z0hat = pfode.sample(zt)
+                pfode.clear_repulsion()  # Clear repulsion state after sampling
                 x0hat = model.decode(z0hat)
 
             # 2. MCMC update (항상 enable_grad - operator.gradient()가 data fitting gradient 계산)
             with torch.enable_grad():
-                # TODO [실험 1]: Repulsion 적용 시 repulsive force 추가
-                # if do_repulsion:
-                #     repulsion_grad = self._compute_repulsion(zt, ...)
-                #     zt = zt - self.repulsion_scale * repulsion_grad
-
                 z0y = self.mcmc_sampler.sample(zt, model, z0hat, warpped_operator, measurement, sigma, step / self.annealing_scheduler.num_steps)
 
                 # TODO [실험 4]: Optimization 적용 시 latent optimization 수행
@@ -277,6 +373,18 @@ class LatentDAPS(DAPS):
             'mean_step_seconds': np.mean(per_step_times),
             'std_step_seconds': np.std(per_step_times),
         }
+
+        # ============================================================
+        # Repulsion Metrics (Exp 1/3)
+        # ============================================================
+        if self._repulsion_module is not None:
+            self.repulsion_info = self._repulsion_module.get_summary_metrics()
+            self.repulsion_info['step_details'] = repulsion_step_info
+            if verbose and len(repulsion_step_info) > 0:
+                print(f"[Repulsion] Summary: {self.repulsion_info['repulsion_active_steps']} active steps, "
+                      f"total time: {self.repulsion_info['repulsion_total_time_seconds']:.2f}s")
+        else:
+            self.repulsion_info = {'repulsion_enabled': False}
 
         return xt
 
