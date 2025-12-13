@@ -4,10 +4,10 @@
 # 목표: Pruning으로 Time/Memory 절약하면서 성능 유지
 # 확인 지표: Max PSNR 유지 여부, Time/Memory 단축량
 #
-# 사용법: bash exp2_pruning.sh [--1] [--10] [--100]
-#   --1   : 1 image sanity check (pruning_step 튜닝용)
-#   --10  : 10 images main experiment
-#   --100 : 100 images final eval
+# 사용법: bash exp2_pruning.sh [--1] [--10] [--90]
+#   --1   : 1 image sanity check (이미지 0, pruning_step 튜닝용)
+#   --10  : 10 images main experiment (이미지 0~9)
+#   --90  : 90 images final eval (이미지 10~99, --10과 합쳐서 100개)
 # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 set -e
@@ -15,22 +15,22 @@ set -e
 # 인자 파싱
 RUN_1=false
 RUN_10=false
-RUN_100=false
+RUN_90=false
 
 for arg in "$@"; do
     case $arg in
         --1) RUN_1=true ;;
         --10) RUN_10=true ;;
-        --100) RUN_100=true ;;
+        --90) RUN_90=true ;;
         *) echo "Unknown argument: $arg"; exit 1 ;;
     esac
 done
 
-if [ "$RUN_1" = false ] && [ "$RUN_10" = false ] && [ "$RUN_100" = false ]; then
-    echo "사용법: bash exp2_pruning.sh [--1] [--10] [--100]"
-    echo "  --1   : 1 image sanity check"
-    echo "  --10  : 10 images main experiment"
-    echo "  --100 : 100 images final eval"
+if [ "$RUN_1" = false ] && [ "$RUN_10" = false ] && [ "$RUN_90" = false ]; then
+    echo "사용법: bash exp2_pruning.sh [--1] [--10] [--90]"
+    echo "  --1   : 1 image sanity check (이미지 0)"
+    echo "  --10  : 10 images main experiment (이미지 0~9)"
+    echo "  --90  : 90 images final eval (이미지 10~99, --10과 합쳐서 100개)"
     exit 0
 fi
 
@@ -82,10 +82,10 @@ if [ "$RUN_10" = true ]; then
 fi
 
 # ============================================================
-# [실험 2] Final Eval - 100 images
+# [실험 2] Final Eval - 90 images (10~99, 앞 10개는 --10에서 이미 실행)
 # ============================================================
-if [ "$RUN_100" = true ]; then
-    echo "========== [실험 2] 100 images final eval =========="
+if [ "$RUN_90" = true ]; then
+    echo "========== [실험 2] 90 images final eval (10~99) =========="
     python posterior_sample.py \
     +data=test-imagenet \
     +model=imagenet256ldm \
@@ -99,8 +99,9 @@ if [ "$RUN_100" = true ]; then
     repulsion_scale=0.1 \
     pruning_step=25 \
     optimization_step=-1 \
+    data.start_id=10 \
     data.end_id=100 \
-    name=exp2_100img \
+    name=exp2_90img \
     gpu=0
 fi
 

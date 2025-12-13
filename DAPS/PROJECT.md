@@ -41,16 +41,16 @@ sh download.sh
 # GPU (CUDA) 명령어 - commands_gpu/ 폴더
 # ============================================================
 # 실험 0
-bash commands_gpu/exp0_baseline.sh --1           # 1 image sanity check -> A10에서 12292MiB 100% 15min.
-bash commands_gpu/exp0_baseline.sh --10          # 10 images
-bash commands_gpu/exp0_baseline.sh --100         # 100 images
+bash commands_gpu/exp0_baseline.sh --1           # 1 image sanity check -> A10에서 150/150W 12292MiB 100% 15min. 하지만 로그엔 Peak Memory: 10116.54 MB 라고 기록됨.
+bash commands_gpu/exp0_baseline.sh --10          # 10 images -> A10에서 2.5시간 걸릴 듯.
+bash commands_gpu/exp0_baseline.sh --90          # 90 images (10~99) -> --10과 합쳐서 100개. A10에서 150/150W 12536MB 100% 15min per image 뜸. 다 돌리면 22.5시간 예상.
 bash commands_gpu/exp0_baseline.sh --1 --10      # 1 + 10 images 순차 실행
 
 # 실험 1~4
-bash commands_gpu/exp1_repulsion.sh --1 --10 --100
-bash commands_gpu/exp2_pruning.sh --1 --10 --100
-bash commands_gpu/exp3_2particle.sh --10 --100    # (1 image 없음)
-bash commands_gpu/exp4_optimization.sh --1 --10 --100
+bash commands_gpu/exp1_repulsion.sh --1 --10 --90
+bash commands_gpu/exp2_pruning.sh --1 --10 --90
+bash commands_gpu/exp3_2particle.sh --10 --90     # (1 image 없음)
+bash commands_gpu/exp4_optimization.sh --1 --10 --90
 
 # 실험 5
 bash commands_gpu/exp5_final.sh --imagenet        # ImageNet 100
@@ -61,10 +61,10 @@ bash commands_gpu/exp5_final.sh --imagenet --ffhq # 둘 다
 # 인자 없이 실행하면 사용법 출력:
 # ============================================================
 $ bash commands_gpu/exp0_baseline.sh
-# 사용법: bash exp0_baseline.sh [--1] [--10] [--100]
-# --1   : 1 image sanity check
-# --10  : 10 images main experiment
-# --100 : 100 images final eval
+# 사용법: bash exp0_baseline.sh [--1] [--10] [--90]
+# --1   : 1 image sanity check (이미지 0)
+# --10  : 10 images main experiment (이미지 0~9)
+# --90  : 90 images final eval (이미지 10~99, --10과 합쳐서 100개)
 
 # ============================================================
 # 직접 python 명령어 실행 시 TPU/CUDA 선택

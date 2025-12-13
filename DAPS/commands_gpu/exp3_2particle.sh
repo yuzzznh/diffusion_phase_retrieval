@@ -4,9 +4,9 @@
 # 목표: "처음부터 2개만 돌리면 안 돼?" 질문에 대한 답변
 # 확인 지표: Success Rate - Exp 2 (4→2)보다 낮아야 함
 #
-# 사용법: bash exp3_2particle.sh [--10] [--100]
-#   --10  : 10 images main experiment
-#   --100 : 100 images final eval
+# 사용법: bash exp3_2particle.sh [--10] [--90]
+#   --10  : 10 images main experiment (이미지 0~9)
+#   --90  : 90 images final eval (이미지 10~99, --10과 합쳐서 100개)
 #   (1 image는 의미 없음 - 실패 비율을 재야 하므로)
 # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -14,20 +14,20 @@ set -e
 
 # 인자 파싱
 RUN_10=false
-RUN_100=false
+RUN_90=false
 
 for arg in "$@"; do
     case $arg in
         --10) RUN_10=true ;;
-        --100) RUN_100=true ;;
+        --90) RUN_90=true ;;
         *) echo "Unknown argument: $arg"; exit 1 ;;
     esac
 done
 
-if [ "$RUN_10" = false ] && [ "$RUN_100" = false ]; then
-    echo "사용법: bash exp3_2particle.sh [--10] [--100]"
-    echo "  --10  : 10 images main experiment"
-    echo "  --100 : 100 images final eval"
+if [ "$RUN_10" = false ] && [ "$RUN_90" = false ]; then
+    echo "사용법: bash exp3_2particle.sh [--10] [--90]"
+    echo "  --10  : 10 images main experiment (이미지 0~9)"
+    echo "  --90  : 90 images final eval (이미지 10~99, --10과 합쳐서 100개)"
     echo "  (1 image는 의미 없음 - 실패 비율을 재야 함)"
     exit 0
 fi
@@ -56,10 +56,10 @@ if [ "$RUN_10" = true ]; then
 fi
 
 # ============================================================
-# [실험 3] Final Eval - 100 images
+# [실험 3] Final Eval - 90 images (10~99, 앞 10개는 --10에서 이미 실행)
 # ============================================================
-if [ "$RUN_100" = true ]; then
-    echo "========== [실험 3] 100 images final eval =========="
+if [ "$RUN_90" = true ]; then
+    echo "========== [실험 3] 90 images final eval (10~99) =========="
     python posterior_sample.py \
     +data=test-imagenet \
     +model=imagenet256ldm \
@@ -73,8 +73,9 @@ if [ "$RUN_100" = true ]; then
     repulsion_scale=0.1 \
     pruning_step=-1 \
     optimization_step=-1 \
+    data.start_id=10 \
     data.end_id=100 \
-    name=exp3_100img \
+    name=exp3_90img \
     gpu=0
 fi
 
