@@ -1,6 +1,6 @@
 gpu: 0
 batch_size: 10
-num_samples: 4  # number of samples per image (for phase retrieval)
+num_samples: 4  # number of samples (particles) per image for phase retrieval
 save_dir: ./results
 name: demo
 wandb: False
@@ -14,3 +14,15 @@ eval_fn_list: ['psnr', 'ssim', 'lpips']
 task_group: pixel  # pixel, sd, or latent
 project_name: 'DAPS'
 seed: 42
+
+# ============================================================
+# 실험 0~5 공통 Flag (Particle Guidance, Pruning, Optimization)
+# ============================================================
+# Particle Guidance (Repulsion) 설정
+repulsion_scale: 0.0  # 입자 간 반발력 초기 강도. 0.0이면 독립 실행 (DAPS baseline), >0.0이면 서로 밀어냄
+
+# Pruning 설정
+pruning_step: -1  # 가지치기 수행 timestep. -1이면 pruning 없음, 양수면 해당 timestep에서 pruning
+
+# Hard Data Consistency (ReSample-style Latent Optimization) 설정
+optimization_step: -1  # latent optimization 시작 timestep. -1이면 optimization 없음, 양수면 해당 timestep부터 시작

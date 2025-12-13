@@ -1,13 +1,42 @@
 # My Project: LatentDAPS로 Langevin Dynamics sampling + TDP-style 탐색으로 0° 180° 찾기 + 맨 마지막 hard data consistency 적용
 
+## 실험별 명령어
+
+``` bash
+# 실험 0
+bash exp0_baseline.sh --1           # 1 image sanity check
+bash exp0_baseline.sh --10          # 10 images
+bash exp0_baseline.sh --100         # 100 images
+bash exp0_baseline.sh --1 --10      # 1 + 10 images 순차 실행
+
+# 실험 1~4
+bash exp1_repulsion.sh --1 --10 --100
+bash exp2_pruning.sh --1 --10 --100
+bash exp3_2particle.sh --10 --100    # (1 image 없음)
+bash exp4_optimization.sh --1 --10 --100
+
+# 실험 5
+bash exp5_final.sh --imagenet        # ImageNet 100
+bash exp5_final.sh --ffhq            # FFHQ 100
+bash exp5_final.sh --imagenet --ffhq # 둘 다
+
+# 인자 없이 실행하면 사용법 출력:
+$ bash exp0_baseline.sh
+# 사용법: bash exp0_baseline.sh [--1] [--10] [--100]
+# --1   : 1 image sanity check
+# --10  : 10 images main experiment
+# --100 : 100 images final eval
+```
+
 ## 실험 진행 및 구현 과정 설계
 
 ### [데이터] imagenet 10장으로 method 비교, 마지막 eval은 ffhq imagenet 100장씩으로 하는걸 목표로, 여건 안되면 ffhq는 버리기 / 시드 고정 (이미 DAPS에서는 42)
 
-### [실험 0] LatentDAPS 논문에 eval 데이터는 100 image에만 나와있으니까 비교를 위해 LatentDAPS(with Langevin Dynamic)의 imagenet first 10 image에 대한 phase retrieval 성능 측정. 
-- 단, 이때 image별로 전부 돌아간 뒤 다음 run이 실행되는 구조로 4 run이 구현돼있는데, 이후 실험들과의 원활한 비교를 위해 eval 명령어를 4 batch = 4 run 구조로 변경해야 함.
-- 또, time도 logging하도록 코드를 수정해야 함. time.time()으로 구간별(Phase 1, 2, 3) 소요 시간을 따로 찍어두면, 나중에 "Pruning으로 Phase 3 시간을 얼마나 줄였는지" 그래프 그리기 좋을 것. 이후, logging 코드에 대한 sanity check 차원에서 1 image 4 run 명령어만 먼저 한번 돌려볼 것.
-- 시간에 따른 GPU VRAM 소모량 변화를 기록해두는 것도 향후 pruning 메소드와의 연산량 비교를 위해 도움이 될듯. VRAM 기록 시 torch.cuda.max_memory_allocated()를 활용하세요.
+### [실험 0] LatentDAPS 논문에 eval 데이터는 100 image에만 나와있으니까 비교를 위해 LatentDAPS(with Langevin Dynamic)의 imagenet first 10 image에 대한 phase retrieval 성능 측정.
+- ~~단, 이때 image별로 전부 돌아간 뒤 다음 run이 실행되는 구조로 4 run이 구현돼있는데, 이후 실험들과의 원활한 비교를 위해 eval 명령어를 4 batch = 4 run 구조로 변경해야 함.~~
+- ~~time logging: diffusion timestep T를 구간개수로 하여 **timestep별 소요 시간**을 측정. 이후 실험에서 pruning/optimization 시점 전후 시간 비교에 활용. sanity check 차원에서 1 image 4 sample 명령어로 먼저 테스트할 것.~~ → **완료**: `sampler.py`의 `LatentDAPS.sample()`에서 step별 시간 측정 (`self.timing_info`에 저장), `posterior_sample.py`에서 이미지별 timing 집계 후 `metrics.json`에 저장.
+- ~~GPU VRAM logging: 실험 0에서는 phase 구분 없이 **전체 구간의 peak VRAM**만 측정. `torch.cuda.max_memory_allocated()` 활용.~~ → **완료**: `posterior_sample.py`에서 `torch.cuda.reset_peak_memory_stats()` 후 `torch.cuda.max_memory_allocated()` 측정, `metrics.json`의 `metadata.gpu.peak_vram_mb`에 저장. (phase별 구간 분리는 실험 2, 4에서 pruning/optimization 추가 시 구현)
+- ~~명령어 자동기록 메커니즘이 이미 있는걸로 아는데, 어떤 메커니즘인지 파악하고, 우리 실험 0~5의 각종 argument 세팅이 잘 기록되도록 코드를 수정할 것.~~ → **Hydra 기반 config 자동기록 확인 완료**: `posterior_sample.py`에서 `OmegaConf.to_container(args)`를 통해 모든 config가 merge된 최종 결과를 `results/<name>/config.yaml`에 자동 저장함. sh 명령어에서 override한 모든 argument가 기록됨.
 
 ### [실험 1] 4-Particle Full Run (Repulsion vs. Independence)
 * 설정: 입자 4개, 처음부터 끝까지($T \to 0$) 유지.
@@ -38,6 +67,10 @@
 ⚠️ 주의할 점 (Indexing Hell):
 * 배치 사이즈가 4에서 2로 줄어들 때, z뿐만 아니라 optimizer의 state, scheduler의 step, measurement y 등 관련된 모든 변수를 같이 줄여야(Slicing) 에러가 안 납니다.
 * 헷갈리면 그냥 4개 유지를 하되, 탈락한 2개에 대해서는 Gradient 계산을 끄는 마스킹(Masking) 처리만 해도 연산량 이득은 증명할 수 있습니다. (메모리 이득은 없지만 구현은 쉬움) $\rightarrow$ 하지만 진짜 메모리 이득을 위해 Slicing을 추천합니다.
+📊 GPU VRAM 측정 구간 분리 (구현 필요):
+* Pruning 추가 시, VRAM 측정을 **pruning 전/후 두 구간**으로 쪼개야 함.
+* `torch.cuda.reset_peak_memory_stats()`를 pruning 시점에 호출하여 각 구간별 peak를 독립 측정.
+* metrics.json에 `vram.pre_pruning_peak_mb`, `vram.post_pruning_peak_mb` 형태로 기록.
 
 ### [실험 3] 2-Particle Full Run (Justification for '4')
 * 설정: 처음부터 2개만 띄워서 끝까지($T \to 0$) 유지.
@@ -50,8 +83,13 @@
 * 사실 여기선 앞선 실험들에서 추가되는 hyperparameter가 없으며, sample들 중 실패하는 것들의 비율을 제대로 재는 것이 관건이므로 1 image 실험이 의미가 없다. 최소한 10 image, 여건이 되면 100 image 실험을 돌리자.
 
 ### [실험 4] 실험 1~3 중 가장 잘 나온 세팅에 대해 ReSample의 hard data consistency in latent space optimization을 돌리자
-- 정확한 횟수 및 기준은 ReSample 공식 레포의 구현에서 실제 몇 번의 optimization이 이루어지는지를 참고해서 결정하자. hyperparameter 튜닝에 1 image 실험을 활용하자. 
+- 정확한 횟수 및 기준은 ReSample 공식 레포의 구현에서 실제 몇 번의 optimization이 이루어지는지를 참고해서 결정하자. hyperparameter 튜닝에 1 image 실험을 활용하자.
 - optimization 횟수 및 소요시간을 보고하자. batch element 간 optimization 및 termination이 independent해야 함에 유의하자 (ReSample 공식 레포는 그렇지 않았음!)
+📊 GPU VRAM 측정 구간 분리 (구현 필요):
+* Optimization 추가 시, VRAM 측정을 **optimization 전/후 두 구간**으로 분리해야 함.
+* `torch.cuda.reset_peak_memory_stats()`를 optimization 시작 시점에 호출하여 각 구간별 peak를 독립 측정.
+* metrics.json에 `vram.pre_optimization_peak_mb`, `vram.optimization_peak_mb` 형태로 기록.
+* 만약 실험 2의 pruning과 함께 사용 시, 3구간으로 분리: `pre_pruning`, `post_pruning_pre_optimization`, `optimization`.
 
 ### [실험 5] 결과를 보고 제일 잘 나온 세팅에 대해 100 image 실험을 돌리자. 
 - 이후 particle guidance, 유전알고리즘적 관점의 설명, phase retrieval with 2 oversampling이라는 2-mode task 자체의 특수성, DAPS와 ReSample과의 실행시간 및 GPU 및 연산량 비교
@@ -132,13 +170,13 @@ ReSample 적용 시점: $T=200$ (Low noise) 시점은 이미 이미지가 거의
 ## 구현 가이드
 - 모든 Measurement Operator($\mathcal{A}$)와 Loss Function은 (B, C, H, W) 형태의 입력을 받아 **배치 단위로 병렬 연산(Broadcasting)**이 가능하도록 작성되어야 한다. for 루프로 배치를 처리하지 말고 PyTorch의 텐서 연산을 쓸 것!
 - 우리는 하나의 $y$(측정값)에 대해 2~4개의 서로 다른 $z_T$(초기 노이즈)를 생성해야 합니다. Data Loader에서 이미지 1장을 가져오면, 이를 **batch_size=2~4로 복제(repeat)**하되, 초기 노이즈 $z_T$는 torch.randn(2~4, ...)로 서로 다르게 생성되도록 코드를 짤 것!
-- 보통 Diffusion Inference는 with torch.no_grad(): 안에서 돕니다. 하지만 우리는 **Repulsion($\nabla_z \Phi$)**과 ReSample Optimization($\nabla_z \|y - Ax\|^2$) 때문에 실험 1~5에서 Gradient가 필요할 예정이다. 따라서, Sampler의 메인 루프는 기본적으로 Gradient 계산이 가능하도록 열어두고(enable_grad), 필요한 부분에서만 메모리 절약을 위해 no_grad를 쓰거나, 혹은 반대로 no_grad 베이스에 특정 스텝(PG, Optimization)에서만 enable_grad를 켜는 토글(Toggle) 구조를 미리 실험 0에서부터 만들어야 한다!
-- 실험 0~5를 스크립트 하나로 제어하려면 Flag 설계가 중요하다. 다음 Argument들을 미리 정의해 둘 것! 
-    --particle_num (int): 한 번에 생성할 입자(이미지)의 개수입니다. 즉, Batch Size입니다. 역할: DAPS의 4번 실행을 재현하거나(4), 2개로 줄였을 때(2)를 제어합니다.
-    --repulsion_scale (float): 입자끼리 밀어내는 힘(Particle Guidance)의 **초기 강도($\alpha_p$)**입니다. 역할: 0.0이면 서로 무시하고 독립적으로 생성(DAPS Baseline)하며, >0.0이면 서로 밀어내며 다양성을 확보합니다. (Time-decay 적용 필요)
-    --pruning_step (int): 가지치기를 수행할 **Diffusion Time Step ($t$)**입니다. 역할: -1이면 가지치기 없이 끝까지 갑니다. 200이면 $t=200$ 시점에서 하위 입자를 제거하고 상위 2개만 남깁니다.
-    --optimization_step (int): ReSample 방식의 Hard Data Consistency(Latent Optimization)를 **시작할 시점($t$)**입니다. 역할: -1이면 최적화 없이 DAPS 샘플링만 수행합니다. 200이면 $t=200$부터 $0$까지 Repulsion을 끄고 Optimization을 켭니다.
-    --num_eval_images (int): 평가할 전체 이미지의 수입니다. 역할: 1(Sanity Check), 10(Tuning), 100(Final Eval)을 제어합니다.
+- ~~보통 Diffusion Inference는 with torch.no_grad(): 안에서 돕니다. 하지만 우리는 **Repulsion($\nabla_z \Phi$)**과 ReSample Optimization($\nabla_z \|y - Ax\|^2$) 때문에 실험 1~5에서 Gradient가 필요할 예정이다. 따라서, Sampler의 메인 루프는 기본적으로 Gradient 계산이 가능하도록 열어두고(enable_grad), 필요한 부분에서만 메모리 절약을 위해 no_grad를 쓰거나, 혹은 반대로 no_grad 베이스에 특정 스텝(PG, Optimization)에서만 enable_grad를 켜는 토글(Toggle) 구조를 미리 실험 0에서부터 만들어야 한다!~~ → **완료**: `sampler.py`의 `LatentDAPS.sample()`에서 `torch.set_grad_enabled(step_needs_grad)` 구조 구현. `do_repulsion`과 `do_optimization` flag로 step별 gradient 활성화 제어. 실험 1, 2, 4 로직은 TODO 주석으로 준비됨.
+- ~~실험 0~5를 스크립트 하나로 제어하려면 Flag 설계가 중요하다. 다음 Argument들을 미리 정의해 둘 것!~~ → **완료**: `configs/default.yaml`에 정의됨
+    - `num_samples` (int): 한 번에 생성할 입자(이미지)의 개수 (기존 DAPS의 num_samples를 그대로 활용, particle_num 역할)
+    - `repulsion_scale` (float): 입자끼리 밀어내는 힘의 초기 강도. 0.0이면 독립 실행 (DAPS baseline), >0.0이면 서로 밀어냄
+    - `pruning_step` (int): 가지치기 수행 timestep. -1이면 pruning 없음
+    - `optimization_step` (int): latent optimization 시작 timestep. -1이면 optimization 없음
+    - (num_eval_images는 data config에서 제어)
 - 실험별 argument 세팅 가이드:
     Exp 0: Baseline (DAPS Replication)particle_num=4, repulsion_scale=0.0:이렇게 설정하면 4개의 입자가 서로 간섭하지 않으므로, DAPS 논문에서 "1개씩 4번 돌린 것(4 runs)"과 수학적으로 완전히 동일한 결과를 냅니다. (시드만 잘 제어된다면)이것이 우리의 Reference 성능이 됩니다.
     Exp 1: Repulsion Onlyrepulsion_scale > 0:이제 4개의 입자가 서로 밀어냅니다.목표: Exp 0보다 **다양성(Std)**이 높고, **최고점(Max PSNR)**이 높게 나오는지 확인합니다.
@@ -146,3 +184,13 @@ ReSample 적용 시점: $T=200$ (Low noise) 시점은 이미 이미지가 거의
     Exp 4: Quality (Optimization)optimization_step=200:$t=1000 \to 201$까지는 Repulsion으로 탐색하고,$t=200 \to 0$부터는 Repulsion을 끄고(scale=0 강제 적용), Latent Optimization을 켭니다.목표: Exp 2보다 PSNR이 확실히 더 올라가는지 확인합니다.
 - metric.json에 phase별 time, gpu, optimization 횟수/시간을 기록할 것
 - metric.json을 Parsing하는 코드를 만들 것
+- 코드 실행을 통한 sanity check는 GPU/TPU가 달린 서버에서 진행할 예정! (로컬 맥북 X)
+- TODO를 완료한 경우 이 PROJECT.md 파일에 취소선을 그어 표시할 것! 만약 논의 결과 md 설명보다 더 적합한 선택지가 있어서 실제 구현에 차이가 생긴 경우 PROJECT.md를 업데이트할 것!
+- git commit message는 한/영 혼용 가능, 실험 몇을 준비하고 있는지 명시, 한 줄 이내로 작성. commit은 vscode gui로만 진행
+- 현 폴더는 DAPS 레포를 베이스로 수정 중에 있으며, TDP 및 ReSample 관련 세부사항은 추후 해당 실험 구현 단계에서 추가 예정
+- ~~command 파일들에 새로운 argument들 반영 및 1/10/100 image용 command 추가~~ → **완료**: `commands/` 폴더 구조:
+    - `exp0_baseline.sh` ~ `exp5_final.sh`: 실험별 전용 command 파일 (1/10/100 image 버전 포함)
+    - `ldm_langevin_imagenet.sh`: 실험 0~4 요약본 (구버전, 참고용)
+    - `ldm_langevin_ffhq.sh`, `ldm_hamiltonian_*.sh`: 참고용
+    - 모든 command에 `repulsion_scale`, `pruning_step`, `optimization_step`, `data.end_id` 반영
+    - command는 주석 처리되어 있으며, 실행할 command의 주석만 해제하고 사용

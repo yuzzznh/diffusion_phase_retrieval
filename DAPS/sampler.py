@@ -1,3 +1,4 @@
+import time
 import tqdm
 import torch
 import numpy as np
@@ -23,7 +24,8 @@ class DAPS(nn.Module):
     Combines diffusion models and MCMC updates for posterior sampling from noisy measurements.
     """
 
-    def __init__(self, annealing_scheduler_config, diffusion_scheduler_config, mcmc_sampler_config):
+    def __init__(self, annealing_scheduler_config, diffusion_scheduler_config, mcmc_sampler_config,
+                 repulsion_scale=0.0, pruning_step=-1, optimization_step=-1):
         """
         Initializes the DAPS sampler with the provided scheduler and sampler configurations.
 
@@ -31,6 +33,9 @@ class DAPS(nn.Module):
             annealing_scheduler_config (dict): Configuration for annealing scheduler.
             diffusion_scheduler_config (dict): Configuration for diffusion scheduler.
             mcmc_sampler_config (dict): Configuration for MCMC sampler.
+            repulsion_scale (float): Initial strength of particle repulsion. 0.0 = independent (DAPS baseline).
+            pruning_step (int): Timestep to perform pruning. -1 = no pruning.
+            optimization_step (int): Timestep to start latent optimization. -1 = no optimization.
         """
         super().__init__()
         annealing_scheduler_config, diffusion_scheduler_config = self._check(annealing_scheduler_config,
@@ -38,6 +43,14 @@ class DAPS(nn.Module):
         self.annealing_scheduler = get_diffusion_scheduler(**annealing_scheduler_config)
         self.diffusion_scheduler_config = diffusion_scheduler_config
         self.mcmc_sampler = MCMCSampler(**mcmc_sampler_config)
+
+        # 실험 1~5용 Flag
+        self.repulsion_scale = repulsion_scale
+        self.pruning_step = pruning_step
+        self.optimization_step = optimization_step
+
+        # Gradient 필요 여부 (실험 0에서는 False)
+        self.needs_grad = (repulsion_scale > 0) or (optimization_step >= 0)
 
     def sample(self, model, x_start, operator, measurement, evaluator=None, record=False, verbose=False, **kwargs):
         """
@@ -164,18 +177,48 @@ class LatentDAPS(DAPS):
         pbar = tqdm.trange(self.annealing_scheduler.num_steps - 1) if verbose else range(self.annealing_scheduler.num_steps - 1)
         warpped_operator = LatentWrapper(operator, model)
 
+        # ============================================================
+        # Time Logging: timestep별 소요 시간 측정
+        # ============================================================
+        total_steps = self.annealing_scheduler.num_steps - 1
+        per_step_times = []  # 각 step별 소요 시간 (초)
+        sampling_start_time = time.time()
+
         zt = z_start
         for step in pbar:
+            step_start_time = time.time()
             sigma = self.annealing_scheduler.sigma_steps[step]
-            # 1. reverse diffusion
+
+            # ============================================================
+            # Gradient Toggle: 실험 1~5에서 필요한 gradient 계산 제어
+            # ============================================================
+            # Repulsion: optimization_step 이전까지만 적용 (초반 탐색)
+            do_repulsion = (self.repulsion_scale > 0) and (self.optimization_step < 0 or step < self.optimization_step)
+            # Optimization: optimization_step 이후부터 적용 (후반 정밀화)
+            do_optimization = (self.optimization_step >= 0) and (step >= self.optimization_step)
+            # 현재 step에서 gradient 필요 여부
+            step_needs_grad = do_repulsion or do_optimization
+
+            # 1. reverse diffusion (항상 no_grad - 메모리 절약)
             with torch.no_grad():
                 diffusion_scheduler = get_diffusion_scheduler(**self.diffusion_scheduler_config, sigma_max=sigma)
                 sampler = DiffusionPFODE(model, diffusion_scheduler, solver='euler')
                 z0hat = sampler.sample(zt)
                 x0hat = model.decode(z0hat)
 
-            # 2. MCMC update
-            z0y = self.mcmc_sampler.sample(zt, model, z0hat, warpped_operator, measurement, sigma, step / self.annealing_scheduler.num_steps)
+            # 2. MCMC update (gradient toggle 적용)
+            with torch.set_grad_enabled(step_needs_grad):
+                # TODO [실험 1]: Repulsion 적용 시 z0y에 repulsive force 추가
+                # if do_repulsion:
+                #     repulsion_grad = self._compute_repulsion(zt, ...)
+                #     zt = zt - self.repulsion_scale * repulsion_grad
+
+                z0y = self.mcmc_sampler.sample(zt, model, z0hat, warpped_operator, measurement, sigma, step / self.annealing_scheduler.num_steps)
+
+                # TODO [실험 4]: Optimization 적용 시 latent optimization 수행
+                # if do_optimization:
+                #     z0y = self._latent_optimization(z0y, measurement, operator, ...)
+
             with torch.no_grad():
                 x0y = model.decode(z0y)
 
@@ -186,6 +229,10 @@ class LatentDAPS(DAPS):
                 zt = z0y
             with torch.no_grad():
                 xt = model.decode(zt)
+
+            # TODO [실험 2]: Pruning 적용
+            # if (self.pruning_step >= 0) and (step == self.pruning_step):
+            #     zt, measurement = self._prune_particles(zt, measurement, ...)
 
             # 4. evaluation
             x0hat_results = x0y_results = {}
@@ -204,5 +251,20 @@ class LatentDAPS(DAPS):
                     })
             if record:
                 self._record(xt, x0y, x0hat, sigma, x0hat_results, x0y_results)
+
+            # Time Logging: step 종료 시간 기록
+            step_end_time = time.time()
+            per_step_times.append(step_end_time - step_start_time)
+
+        # Time Logging: 전체 샘플링 시간 및 통계 저장
+        sampling_end_time = time.time()
+        self.timing_info = {
+            'total_seconds': sampling_end_time - sampling_start_time,
+            'total_steps': total_steps,
+            'per_step_seconds': per_step_times,
+            'mean_step_seconds': np.mean(per_step_times),
+            'std_step_seconds': np.std(per_step_times),
+        }
+
         return xt
 

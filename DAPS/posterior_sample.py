@@ -198,8 +198,14 @@ def main(args):
     operator = get_operator(**task_group.operator)
     y = operator.measure(images)
 
-    # get sampler
-    sampler = get_sampler(**args.sampler, mcmc_sampler_config=task_group.mcmc_sampler_config)
+    # get sampler (실험 0~5 flag 전달)
+    sampler = get_sampler(
+        **args.sampler,
+        mcmc_sampler_config=task_group.mcmc_sampler_config,
+        repulsion_scale=args.repulsion_scale,
+        pruning_step=args.pruning_step,
+        optimization_step=args.optimization_step
+    )
 
     # get model
     model = get_model(**args.model)
@@ -231,6 +237,16 @@ def main(args):
     all_samples = []  # [N, num_samples, C, H, W]
     all_trajs = []
     per_image_results = []
+    per_image_timing = []  # Time logging: 이미지별 timing 정보
+
+    # ============================================================
+    # VRAM Logging: 샘플링 시작 전 peak memory 초기화
+    # ============================================================
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+
+    import time
+    total_sampling_start_time = time.time()
 
     for img_idx in range(total_number):
         print(f'Processing image {img_idx + 1}/{total_number}')
@@ -250,6 +266,10 @@ def main(args):
         if trajs is not None:
             all_trajs.append(trajs)
 
+        # Time logging: sampler의 timing_info 수집
+        if hasattr(sampler, 'timing_info'):
+            per_image_timing.append(sampler.timing_info.copy())
+
         # Log per-image metrics
         main_metric = evaluator.main_eval_fn_name
         print(f'  Image {img_idx}: {main_metric} best={per_image_result[main_metric]["best"]:.3f}, '
@@ -265,8 +285,53 @@ def main(args):
     # Stack all samples: [N, num_samples, C, H, W]
     all_samples = torch.stack(all_samples, dim=0)
 
+    # ============================================================
+    # Time & VRAM Logging: 샘플링 완료 후 측정
+    # ============================================================
+    total_sampling_end_time = time.time()
+    total_sampling_seconds = total_sampling_end_time - total_sampling_start_time
+
+    # VRAM Logging: peak memory 측정
+    peak_vram_mb = 0.0
+    if torch.cuda.is_available():
+        peak_vram_mb = torch.cuda.max_memory_allocated() / (1024 ** 2)  # MB 단위
+
+    # Time Logging: 이미지별 timing 집계
+    timing_summary = {}
+    if per_image_timing:
+        all_step_times = []
+        for t in per_image_timing:
+            all_step_times.extend(t.get('per_step_seconds', []))
+        timing_summary = {
+            'total_seconds': total_sampling_seconds,
+            'per_image_seconds': [t.get('total_seconds', 0) for t in per_image_timing],
+            'mean_per_image_seconds': np.mean([t.get('total_seconds', 0) for t in per_image_timing]),
+            'total_steps_per_image': per_image_timing[0].get('total_steps', 0) if per_image_timing else 0,
+            'mean_step_seconds': np.mean(all_step_times) if all_step_times else 0,
+            'std_step_seconds': np.std(all_step_times) if all_step_times else 0,
+        }
+
     # Aggregate results
     results = evaluator.aggregate_results(per_image_results)
+
+    # ============================================================
+    # metrics.json에 metadata 추가 (timing, vram, hyperparameters)
+    # ============================================================
+    from datetime import datetime
+    results['metadata'] = {
+        'timestamp': datetime.now().isoformat(),
+        'num_images': total_number,
+        'num_samples': num_samples,
+        'hyperparameters': {
+            'repulsion_scale': args.repulsion_scale,
+            'pruning_step': args.pruning_step,
+            'optimization_step': args.optimization_step,
+        },
+        'timing': timing_summary,
+        'gpu': {
+            'peak_vram_mb': peak_vram_mb,
+        }
+    }
 
     # Display and save metrics
     markdown_text = evaluator.display_aggregated(results)
@@ -274,6 +339,14 @@ def main(args):
         file.write(markdown_text)
     json.dump(results, open(str(root / 'metrics.json'), 'w'), indent=4)
     print(markdown_text)
+
+    # Print timing and VRAM summary
+    print(f'\n=== Timing & VRAM Summary ===')
+    print(f'Total sampling time: {total_sampling_seconds:.2f}s')
+    if timing_summary:
+        print(f'Mean per-image time: {timing_summary["mean_per_image_seconds"]:.2f}s')
+        print(f'Mean per-step time: {timing_summary["mean_step_seconds"]*1000:.2f}ms')
+    print(f'Peak VRAM: {peak_vram_mb:.2f} MB')
 
     if args.wandb:
         evaluator.log_wandb_overall(results)
