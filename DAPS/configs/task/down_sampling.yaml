@@ -31,8 +31,8 @@ pixel_hmc:
     scale_factor: 4
     sigma: 0.05
 
-# latent diffusion model
-ldm: 
+# latent diffusion model with hamiltonian
+ldm_hamiltonian: 
   mcmc_sampler_config: 
     num_steps: 24
     lr: 1.35e-4 
@@ -40,6 +40,22 @@ ldm:
     lr_min_ratio: 0.023
     momentum: 0.86
     mc_algo: hmc
+    prior_solver: gaussian
+
+  operator:
+    name: down_sampling
+    resolution: 256
+    scale_factor: 4
+    sigma: 0.05
+
+# latent diffusion model with langevin
+ldm_langevin:
+  mcmc_sampler_config:
+    num_steps: 50
+    lr: 1e-4
+    tau: 0.01
+    lr_min_ratio: 0.01
+    mc_algo: langevin
     prior_solver: gaussian
 
   operator:

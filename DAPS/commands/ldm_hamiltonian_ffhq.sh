@@ -10,8 +10,8 @@ python posterior_sample.py \
 +model=ffhq256ldm \
 +task=phase_retrieval \
 +sampler=latent_edm_daps \
-task_group=ldm \
-save_dir=results/ldm/ffhq \
+task_group=ldm_hamiltonian \
+save_dir=results/ldm_hamiltonian/ffhq \
 num_runs=4 \
 sampler.diffusion_scheduler_config.num_steps=2 \
 sampler.annealing_scheduler_config.num_steps=50 \
@@ -25,8 +25,8 @@ python posterior_sample.py \
 +model=ffhq256ldm \
 +task=nonlinear_blur \
 +sampler=latent_edm_daps \
-task_group=ldm \
-save_dir=results/ldm/ffhq \
+task_group=ldm_hamiltonian \
+save_dir=results/ldm_hamiltonian/ffhq \
 num_runs=1 \
 sampler.diffusion_scheduler_config.num_steps=2 \
 sampler.annealing_scheduler_config.num_steps=50 \
@@ -40,8 +40,8 @@ python posterior_sample.py \
 +model=ffhq256ldm \
 +task=hdr \
 +sampler=latent_edm_daps \
-task_group=ldm \
-save_dir=results/ldm/ffhq \
+task_group=ldm_hamiltonian \
+save_dir=results/ldm_hamiltonian/ffhq \
 num_runs=1 \
 sampler.diffusion_scheduler_config.num_steps=2 \
 sampler.annealing_scheduler_config.num_steps=50 \
@@ -56,8 +56,8 @@ python posterior_sample.py \
 +model=ffhq256ldm \
 +task=down_sampling \
 +sampler=latent_edm_daps \
-task_group=ldm \
-save_dir=results/ldm/ffhq \
+task_group=ldm_hamiltonian \
+save_dir=results/ldm_hamiltonian/ffhq \
 num_runs=1 \
 sampler.diffusion_scheduler_config.num_steps=2 \
 sampler.annealing_scheduler_config.num_steps=50 \
@@ -71,8 +71,8 @@ python posterior_sample.py \
 +model=ffhq256ldm \
 +task=gaussian_blur \
 +sampler=latent_edm_daps \
-task_group=ldm \
-save_dir=results/ldm/ffhq \
+task_group=ldm_hamiltonian \
+save_dir=results/ldm_hamiltonian/ffhq \
 num_runs=1 \
 sampler.diffusion_scheduler_config.num_steps=2 \
 sampler.annealing_scheduler_config.num_steps=50 \
@@ -86,8 +86,8 @@ python posterior_sample.py \
 +model=ffhq256ldm \
 +task=motion_blur \
 +sampler=latent_edm_daps \
-task_group=ldm \
-save_dir=results/ldm/ffhq \
+task_group=ldm_hamiltonian \
+save_dir=results/ldm_hamiltonian/ffhq \
 num_runs=1 \
 sampler.diffusion_scheduler_config.num_steps=2 \
 sampler.annealing_scheduler_config.num_steps=50 \
@@ -101,8 +101,8 @@ python posterior_sample.py \
 +model=ffhq256ldm \
 +task=inpainting \
 +sampler=latent_edm_daps \
-task_group=ldm \
-save_dir=results/ldm/ffhq \
+task_group=ldm_hamiltonian \
+save_dir=results/ldm_hamiltonian/ffhq \
 num_runs=1 \
 sampler.diffusion_scheduler_config.num_steps=2 \
 sampler.annealing_scheduler_config.num_steps=50 \
@@ -116,8 +116,8 @@ python posterior_sample.py \
 +model=ffhq256ldm \
 +task=inpainting_rand \
 +sampler=latent_edm_daps \
-task_group=ldm \
-save_dir=results/ldm/ffhq \
+task_group=ldm_hamiltonian \
+save_dir=results/ldm_hamiltonian/ffhq \
 num_runs=1 \
 sampler.diffusion_scheduler_config.num_steps=2 \
 sampler.annealing_scheduler_config.num_steps=50 \
