@@ -82,8 +82,65 @@ class DinoFeatureExtractor(nn.Module):
     def _load_model(self):
         """Lazy load DINO model."""
         if not self._loaded:
+            import sys
+            import os
+            import zipfile
+
             print(f"[Repulsion] Loading DINO model: {self.model_name}")
-            self._model = torch.hub.load('facebookresearch/dino:main', self.model_name)
+
+            # WORKAROUND: DINO's vision_transformer.py does `from utils import trunc_normal_`
+            # which conflicts with DAPS's utils/ package.
+            # Solution: Add DINO cache path FIRST in sys.path so DINO's utils.py takes precedence
+
+            dino_cache_path = os.path.expanduser('~/.cache/torch/hub/facebookresearch_dino_main')
+            hub_dir = os.path.expanduser('~/.cache/torch/hub')
+
+            # Ensure DINO repo is downloaded first
+            if not os.path.exists(dino_cache_path):
+                # Download without executing (just to get the cache)
+                zip_path = os.path.join(hub_dir, 'main.zip')
+                torch.hub.download_url_to_file(
+                    'https://github.com/facebookresearch/dino/zipball/main',
+                    zip_path
+                )
+                with zipfile.ZipFile(zip_path, 'r') as zf:
+                    zf.extractall(hub_dir)
+                # Find the extracted folder name
+                for name in os.listdir(hub_dir):
+                    if name.startswith('facebookresearch-dino'):
+                        os.rename(os.path.join(hub_dir, name), dino_cache_path)
+                        break
+
+            original_path = sys.path.copy()
+            original_cwd = os.getcwd()
+
+            try:
+                # Remove any conflicting 'utils' module from sys.modules
+                if 'utils' in sys.modules:
+                    del sys.modules['utils']
+
+                # Add DINO cache path at the START of sys.path
+                # This ensures DINO's utils.py is found before DAPS's utils/
+                sys.path.insert(0, dino_cache_path)
+
+                # Also remove paths that might override DINO's utils
+                sys.path = [dino_cache_path] + [
+                    p for p in sys.path[1:]
+                    if p and 'DAPS' not in p and 'diffusion_phase_retrieval' not in p
+                ]
+
+                # Change cwd to avoid local imports
+                os.chdir(dino_cache_path)
+
+                self._model = torch.hub.load('facebookresearch/dino:main', self.model_name, trust_repo=True)
+            finally:
+                # Restore original path, cwd, and clean up utils module
+                sys.path = original_path
+                os.chdir(original_cwd)
+                # Remove DINO's utils from modules to avoid conflicts later
+                if 'utils' in sys.modules and hasattr(sys.modules['utils'], 'trunc_normal_'):
+                    del sys.modules['utils']
+
             self._model.eval()
             self._model.requires_grad_(False)
             if self.device is not None:
