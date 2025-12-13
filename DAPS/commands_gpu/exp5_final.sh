@@ -4,7 +4,7 @@
 # 목표: 제일 잘 나온 세팅으로 최종 평가 및 비교 Table 생성
 #
 # 사용법: bash exp5_final.sh [--imagenet] [--ffhq]
-#   --imagenet : ImageNet 100 images
+#   --imagenet : ImageNet 90 images (이미지 10~99, 앞 10개는 다른 실험에서 사용)
 #   --ffhq     : FFHQ 100 images (옵션 - 여건 안되면 생략 가능)
 # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -24,17 +24,17 @@ done
 
 if [ "$RUN_IMAGENET" = false ] && [ "$RUN_FFHQ" = false ]; then
     echo "사용법: bash exp5_final.sh [--imagenet] [--ffhq]"
-    echo "  --imagenet : ImageNet 100 images"
+    echo "  --imagenet : ImageNet 90 images (이미지 10~99)"
     echo "  --ffhq     : FFHQ 100 images (옵션)"
     exit 0
 fi
 
 # ============================================================
-# [실험 5] ImageNet 100 images - Best Setting
+# [실험 5] ImageNet 90 images - Best Setting (10~99, 앞 10개는 다른 실험에서 사용)
 # NOTE: 실험 1~4 결과 보고 best hyperparameter로 업데이트
 # ============================================================
 if [ "$RUN_IMAGENET" = true ]; then
-    echo "========== [실험 5] ImageNet 100 images =========="
+    echo "========== [실험 5] ImageNet 90 images (10~99) =========="
     python posterior_sample.py \
     +data=test-imagenet \
     +model=imagenet256ldm \
@@ -48,8 +48,9 @@ if [ "$RUN_IMAGENET" = true ]; then
     repulsion_scale=0.1 \
     pruning_step=25 \
     optimization_step=25 \
+    data.start_id=10 \
     data.end_id=100 \
-    name=exp5_imagenet_100img \
+    name=exp5_imagenet_90img \
     gpu=0
 fi
 

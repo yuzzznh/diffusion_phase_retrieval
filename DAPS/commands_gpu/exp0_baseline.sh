@@ -4,10 +4,10 @@
 # 목표: LatentDAPS의 ImageNet Phase Retrieval 성능 측정 (Reference)
 # 설정: num_samples=4, repulsion_scale=0.0 (독립 실행 = DAPS 4 runs)
 #
-# 사용법: bash exp0_baseline.sh [--1] [--10] [--100]
-#   --1   : 1 image sanity check
-#   --10  : 10 images main experiment
-#   --100 : 100 images final eval
+# 사용법: bash exp0_baseline.sh [--1] [--10] [--90]
+#   --1   : 1 image sanity check (이미지 0)
+#   --10  : 10 images main experiment (이미지 0~9)
+#   --90  : 90 images final eval (이미지 10~99, --10과 합쳐서 100개)
 #   (인자 없으면 사용법 출력)
 # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -16,23 +16,23 @@ set -e  # 에러 발생 시 중단
 # 인자 파싱
 RUN_1=false
 RUN_10=false
-RUN_100=false
+RUN_90=false
 
 for arg in "$@"; do
     case $arg in
         --1) RUN_1=true ;;
         --10) RUN_10=true ;;
-        --100) RUN_100=true ;;
+        --90) RUN_90=true ;;
         *) echo "Unknown argument: $arg"; exit 1 ;;
     esac
 done
 
 # 인자 없으면 사용법 출력
-if [ "$RUN_1" = false ] && [ "$RUN_10" = false ] && [ "$RUN_100" = false ]; then
-    echo "사용법: bash exp0_baseline.sh [--1] [--10] [--100]"
-    echo "  --1   : 1 image sanity check"
-    echo "  --10  : 10 images main experiment"
-    echo "  --100 : 100 images final eval"
+if [ "$RUN_1" = false ] && [ "$RUN_10" = false ] && [ "$RUN_90" = false ]; then
+    echo "사용법: bash exp0_baseline.sh [--1] [--10] [--90]"
+    echo "  --1   : 1 image sanity check (이미지 0)"
+    echo "  --10  : 10 images main experiment (이미지 0~9)"
+    echo "  --90  : 90 images final eval (이미지 10~99, --10과 합쳐서 100개)"
     exit 0
 fi
 
@@ -83,10 +83,10 @@ if [ "$RUN_10" = true ]; then
 fi
 
 # ============================================================
-# [실험 0] Final Eval - 100 images
+# [실험 0] Final Eval - 90 images (10~99, 앞 10개는 --10에서 이미 실행)
 # ============================================================
-if [ "$RUN_100" = true ]; then
-    echo "========== [실험 0] 100 images final eval =========="
+if [ "$RUN_90" = true ]; then
+    echo "========== [실험 0] 90 images final eval (10~99) =========="
     python posterior_sample.py \
     +data=test-imagenet \
     +model=imagenet256ldm \
@@ -100,8 +100,9 @@ if [ "$RUN_100" = true ]; then
     repulsion_scale=0.0 \
     pruning_step=-1 \
     optimization_step=-1 \
+    data.start_id=10 \
     data.end_id=100 \
-    name=exp0_100img \
+    name=exp0_90img \
     gpu=0
 fi
 
