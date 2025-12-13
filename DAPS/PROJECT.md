@@ -2,11 +2,37 @@
 
 ## TPU 서버 설정 가이드라인
 
+서버 켜는 법 예시:
 ```bash
+gcloud compute tpus tpu-vm create yujin_tpu \
+  --zone=us-west1-c \
+  --accelerator-type=v5litepod-4 \
+  --version=tpu-vm-pt-2.0
+```
+
+환경설정 방법 (GCP TPU VM):
+
+GCP TPU VM은 이미 최적화된 PyTorch + XLA가 시스템에 깔려있어서, 그냥 시스템 Python 쓰면 됨!
+
+```bash
+# 1. 환경변수 설정
 echo 'export PJRT_DEVICE=TPU' >> ~/.bashrc
 echo 'export PJRT_SELECT_DEFAULT_DEVICE=1' >> ~/.bashrc
 source ~/.bashrc
+
+# 2. 의존성 설치
+pip install -r requirements.txt
+
+# 3. 체크포인트 다운로드
+sh download.sh
+
+# 끝!
 ```
+
+**삽질한 것 (불필요했음)**
+- Miniconda 설치
+- conda 환경 생성
+- torch-xla 따로 설치
 
 ## 실험별 명령어
 
