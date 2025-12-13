@@ -170,7 +170,7 @@ python posterior_sample.py \
 +sampler=edm_daps \
 task_group=pixel \
 save_dir=results \
-num_runs=4 \
+num_samples=4 \
 sampler.diffusion_scheduler_config.num_steps=5 \
 sampler.annealing_scheduler_config.num_steps=200 \
 batch_size=10 \
@@ -218,7 +218,7 @@ python posterior_sample.py \
 +sampler={SAMPLER_CONFIG_NAME} \
 task_group={pixel, ldm, sd} # choose the used task parameters group \
 save_dir=results \
-num_runs={NUMBER_OF_RUNS} \
+num_samples={NUMBER_OF_RUNS} \
 sampler.diffusion_scheduler_config.num_steps={DIFFUSION_ODE_STEPS} \
 sampler.annealing_scheduler_config.num_steps={ANNEALING_STEPS} \
 batch_size=100 \

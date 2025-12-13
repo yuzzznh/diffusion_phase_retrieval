@@ -74,6 +74,66 @@ class Evaluator:
             }
         return result_dicts
 
+    def report_per_image(self, gt, measurement, samples):
+        '''
+        Evaluate a single image with multiple samples.
+
+        Args:
+            gt: [C, H, W] - single ground truth image
+            measurement: [...] - single measurement
+            samples: [num_samples, C, H, W] - multiple samples for this image
+
+        Returns:
+            dict: per-image evaluation results with statistics over samples
+        '''
+        num_samples = samples.shape[0]
+        gt_expanded = gt.unsqueeze(0).expand(num_samples, -1, -1, -1)  # [num_samples, C, H, W]
+
+        result_dict = {}
+        for key, fn in self.eval_fn.items():
+            values = fn(gt_expanded, measurement.unsqueeze(0).expand(num_samples, *measurement.shape),
+                       samples, reduction='none')  # [num_samples]
+            cmp = get_eval_fn_cmp(key)
+            best_idx = values.argmax() if cmp == 'max' else values.argmin()
+            result_dict[key] = {
+                'samples': self.to_list(values),
+                'mean': float(values.mean()),
+                'std': float(values.std()) if num_samples > 1 else 0.0,
+                'max': float(values.max()),
+                'min': float(values.min()),
+                'best': float(values[best_idx]),
+                'best_idx': int(best_idx),
+            }
+        return result_dict
+
+    def aggregate_results(self, per_image_results):
+        '''
+        Aggregate per-image results into overall statistics.
+
+        Args:
+            per_image_results: list of dicts from report_per_image
+
+        Returns:
+            dict: aggregated results with per_image and overall statistics
+        '''
+        result_dicts = {}
+
+        for key in self.eval_fn.keys():
+            per_image_data = [r[key] for r in per_image_results]
+            best_values = [r['best'] for r in per_image_data]
+            mean_values = [r['mean'] for r in per_image_data]
+
+            result_dicts[key] = {
+                'per_image': per_image_data,
+                'overall': {
+                    'best_mean': float(np.mean(best_values)),
+                    'best_std': float(np.std(best_values)),
+                    'mean_of_means': float(np.mean(mean_values)),
+                    'std_of_means': float(np.std(mean_values)),
+                }
+            }
+        return result_dicts
+
     def display(self, result_dicts):
         table = Table('results')
         average, std = {}, {}
@@ -92,6 +152,26 @@ class Evaluator:
 
         return table.get_string()
 
+    def display_aggregated(self, result_dicts):
+        '''Display aggregated results from aggregate_results().'''
+        table = Table('results')
+
+        # Get best values for each image
+        for key in result_dicts.keys():
+            per_image = result_dicts[key]['per_image']
+            best_values = ['{:.3f}'.format(r['best']) for r in per_image]
+            table.add_column(key, best_values)
+
+        # Add overall statistics
+        table.add_row(['' for _ in result_dicts.keys()])
+        table.add_row(['best_mean' for _ in result_dicts.keys()])
+        table.add_row(['{:.3f}'.format(result_dicts[key]['overall']['best_mean']) for key in result_dicts.keys()])
+        table.add_row(['' for _ in result_dicts.keys()])
+        table.add_row(['best_std' for _ in result_dicts.keys()])
+        table.add_row(['{:.3f}'.format(result_dicts[key]['overall']['best_std']) for key in result_dicts.keys()])
+
+        return table.get_string()
+
     def log_wandb(self, result_dicts, batch_size):
         for s in range(batch_size):
             log_dict = {key: result_dicts[key][get_eval_fn_cmp(key)][s] for key in result_dicts.keys()}
@@ -100,6 +180,26 @@ class Evaluator:
         new_log_dict = {key + '_all': value for key, value in log_dict.items()}
         wandb.log(new_log_dict)
         return
+
+    def log_wandb_aggregated(self, result_dicts, image_idx):
+        '''Log per-image results to wandb.'''
+        for key in result_dicts.keys():
+            per_image = result_dicts[key]['per_image'][image_idx]
+            log_dict = {
+                f'{key}_best': per_image['best'],
+                f'{key}_mean': per_image['mean'],
+                f'{key}_std': per_image['std'],
+            }
+            wandb.log(log_dict)
+
+    def log_wandb_overall(self, result_dicts):
+        '''Log overall statistics to wandb.'''
+        log_dict = {}
+        for key in result_dicts.keys():
+            overall = result_dicts[key]['overall']
+            log_dict[f'{key}_best_mean'] = overall['best_mean']
+            log_dict[f'{key}_best_std'] = overall['best_std']
+        wandb.log(log_dict)
 
 
 class Table(object):

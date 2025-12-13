@@ -30,7 +30,7 @@ command:
   - +data=demo-ffhq
   - +model=stable-diffusion-v1.5
   - +task=phase_retrieval
-  - num_runs=4
+  - num_samples=4
   - +sampler=sd_edm_daps
   - task_group=sd
   - save_dir=results/sweep
