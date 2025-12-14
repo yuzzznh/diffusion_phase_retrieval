@@ -184,7 +184,7 @@ results/exp3_2particle/imagenet_1img/exp3_sanity_check → exp3_sanity_check_sca
 bash commands_gpu/exp1_repulsion.sh --1
 # → results/exp1_repulsion/imagenet_1img/exp1_sanity_check_scale10/
 
-# Exp3 (2-particle) sanity check 🔄 실행 중
+# Exp3 (2-particle) sanity check ✅ 완료
 bash commands_gpu/exp3_2particle.sh --1
 # → results/exp3_2particle/imagenet_1img/exp3_sanity_check_scale10/
 ```
@@ -193,7 +193,7 @@ bash commands_gpu/exp3_2particle.sh --1
 - ~~`repulsion.jsonl`에서 `ratio_scaled_to_score`가 0이 아닌 값인지~~ → ✅ step 0에서 0.0625 (6.25%) 확인
 - ~~초반 step에서 `repulsion_on=true`이고 `repulsion_scale_used=10`인지~~ → ✅ 확인
 - ~~assert 통과 여부 (에러 없이 완료되면 OK)~~ → ✅ 정상 완료
-- Exp3 (N=2)에서 bandwidth 버그 수정이 정상 작동하는지 (NaN/crash 없음) → 🔄 확인 중
+- ~~Exp3 (N=2)에서 bandwidth 버그 수정이 정상 작동하는지 (NaN/crash 없음)~~ → ✅ 완료 (NaN/crash 없이 정상 완료)
 
 * 설정: 입자 4개, 처음부터 끝까지($T \to 0$) 유지.
 * 비교: Ours (Repulsion ON) vs. DAPS Baseline (Repulsion OFF, Independent)
@@ -597,11 +597,64 @@ step 0 ratio가 **0.0625 (6.25%)** 로 안전+영향 있는 구간(0.05~0.2)에 
 | 순서 | 실험 | 상태 | 목적 |
 |------|------|------|------|
 | 0 | Exp1 sanity check (4p, scale=10) | ✅ **완료** | scale 튜닝 → **Sweet Spot 확정** |
-| 1 | Exp3 sanity check (2p, scale=10) | 🔄 **실행 중** | N=2 안정성 확인 |
+| 1 | Exp3 sanity check (2p, scale=10) | ✅ **완료** | N=2 안정성 확인 → **2p 대비 4p 우위 확인! (가설대로)** |
 | 2 | Exp1 10 images (4p, scale=10) | ⏳ 대기 | 재현성 검증 |
 | 3 | Exp3 10 images (2p, scale=10) | ⏳ 대기 | 2p vs 4p 비교 |
 
-- 결과 폴더: `results/exp1_repulsion/imagenet_1img/exp1_sanity_check_scale10/`
+- Exp1 결과 폴더: `results/exp1_repulsion/imagenet_1img/exp1_sanity_check_scale10/`
+- Exp3 결과 폴더: `results/exp3_2particle/imagenet_1img/exp3_sanity_check_scale10/`
+
+### [실험 3] Sanity Check (2025-12-14 KST) - scale=10, 2-particle ✅ 완료
+
+#### Exp1 vs Exp3 비교 (1 Image, scale=10)
+
+| Metric | Exp1 (4p) | Exp3 (2p) | 차이 |
+|--------|-----------|-----------|------|
+| **Best PSNR** | **20.66** | 10.59 | **-10.07 dB** |
+| Mean PSNR | 12.83 | 9.20 | -3.63 dB |
+| Pairwise Dist | 70.70 | 59.27 | -11.43 |
+| step 0 ratio | 0.0625 | 0.034 | 더 약함 |
+| Time | 911초 | 464초 | **-49%** ✅ |
+| VRAM | 10,209 MB | 6,066 MB | **-41%** ✅ |
+
+#### Repulsion 로그 분석 (2-particle)
+
+| Step | σ | ratio_scaled_to_score | Pairwise Dist | weights_mean |
+|------|-----|----------------------|---------------|--------------|
+| 0 | 10.0 | 0.034 (3.4%) | 20.8 | 0.5 ✅ |
+| 5 | 7.1 | 0.019 | 51.9 | 0.5 |
+| 25 | 1.5 | 0.011 | 73.9 | 0.5 |
+
+#### 분석 및 핵심 발견
+
+**Good**:
+- ✅ **N=2 bandwidth 버그 수정 확인**: NaN/crash 없이 정상 완료
+- ✅ **weights_mean = 0.5**: N=2에서 정상 작동 (kernel weight 정규화 OK)
+- ✅ **시간 49%, VRAM 41% 절약**: 효율성 측면에서 기대대로
+
+**Critical Observation**:
+- **4p가 2p보다 PSNR 훨씬 높음** (20.66 vs 10.59, -10 dB)
+- 이건 단순 노이즈 차이가 아니라, **2p가 좋은 모드(0°/180° 중 하나)를 못 잡고 다른 basin으로 빠진 케이스**일 확률이 높음
+- ratio가 2p에서 더 약한 것도 자연스러움 (입자 수가 적으면 repulsion gradient 구성 자체가 달라지고, "좋은 후보를 포함할 확률"이 떨어짐)
+
+#### 결과 해석: Exp2 Pruning 전략의 설득력 ⭐
+
+> **"2p는 싸지만 불안정. 4p로 탐색 후 2로 줄이는 pruning이 sweet spot."**
+
+이 스토리가 **1장 sanity에서도 바로 드러났다**:
+- 4p Best PSNR 20.66 vs 2p 10.59 (-10 dB) 차이는 **"통계 부족"을 감안해도 신호가 너무 강해서 방향성이 거의 확정적**
+- 2p는 처음부터 2개만 띄우면 둘 다 Local Minima에 빠질 위험이 높음
+- 4p는 초반에 넓게 탐색하여 좋은 모드를 찾을 확률이 높음
+
+**→ Exp2 (4→2 Pruning)의 논리가 훨씬 설득력 있어졌다:**
+- 4개로 시작해서 다양한 basin 탐색 → 중간에 유망한 2개만 남김
+- **"처음부터 2개만 쓰면 안 되나요?"** 라는 리뷰어 질문에 대한 강력한 반박 근거 확보
+- 1장 sanity check에서 이미 -10 dB 차이 → **10 images 비교 없이도 방향성 확정**
+
+#### 다음 단계
+
+- 10 images 비교로 통계적 유의성 확보 (optional, 이미 강한 신호)
+- **Exp2 (4→2 Pruning) 구현 우선순위 상승** - pruning이 정말 sweet spot인지 검증
 
 ## 프로젝트 기대 결과: 보다 적은 연산으로 비슷하거나 더 좋은 성능을!
 - DAPS에서 Phase Retrieval의 불안정성을 고려하여, 4번의 independent runs을 수행한 뒤 가장 좋은 결과를 선택하여 보고했으니, 우리플젝을 DAPS 4 run이랑 비교했을때 시간xGPU 사용량이 비슷하거나 작으면서 성능이 비슷하거나 높음을 보이면 되는 것!
@@ -610,6 +663,8 @@ step 0 ratio가 **0.0625 (6.25%)** 로 안전+영향 있는 구간(0.05~0.2)에 
 
 
 ## 구현 가이드
+
+### 실험1 Repulsion
 - 모든 Measurement Operator($\mathcal{A}$)와 Loss Function은 (B, C, H, W) 형태의 입력을 받아 **배치 단위로 병렬 연산(Broadcasting)**이 가능하도록 작성되어야 한다. for 루프로 배치를 처리하지 말고 PyTorch의 텐서 연산을 쓸 것!
 - 우리는 하나의 $y$(측정값)에 대해 2~4개의 서로 다른 $z_T$(초기 노이즈)를 생성해야 합니다. Data Loader에서 이미지 1장을 가져오면, 이를 **batch_size=2~4로 복제(repeat)**하되, 초기 노이즈 $z_T$는 torch.randn(2~4, ...)로 서로 다르게 생성되도록 코드를 짤 것!
 - ~~보통 Diffusion Inference는 with torch.no_grad(): 안에서 돕니다. 하지만 우리는 **Repulsion($\nabla_z \Phi$)**과 ReSample Optimization($\nabla_z \|y - Ax\|^2$) 때문에 실험 1~5에서 Gradient가 필요할 예정이다. 따라서, Sampler의 메인 루프는 기본적으로 Gradient 계산이 가능하도록 열어두고(enable_grad), 필요한 부분에서만 메모리 절약을 위해 no_grad를 쓰거나, 혹은 반대로 no_grad 베이스에 특정 스텝(PG, Optimization)에서만 enable_grad를 켜는 토글(Toggle) 구조를 미리 실험 0에서부터 만들어야 한다!~~ → **완료**: `sampler.py`의 `LatentDAPS.sample()`에서 `torch.set_grad_enabled(step_needs_grad)` 구조 구현. `do_repulsion`과 `do_optimization` flag로 step별 gradient 활성화 제어. 실험 1, 2, 4 로직은 TODO 주석으로 준비됨.
@@ -799,3 +854,81 @@ Please proceed by:
 	2.	mapping RLSD code dependencies (DINO loading, preprocessing, additionally required env setting: pip requirements, download sh, etc.)
 	3.	implementing and testing quickly with 1-image run (if any additional installation or download is needed, do so, and document it inside DAPS requirements and download scripts)
 	4.	report back with patch summary and instructions.
+
+### 실험2 Pruning
+이제 Exp2 최소 pruning(4→2) 를 구현해줘.
+
+0) exp2 sh 수정 (필수)
+	•	pruning은 repulsion OFF 전환 직후에 1회 수행할 거라서, commands_gpu/exp2_pruning.sh에서
+	•	pruning_step=29 로 바꿔줘.
+	•	이유를 주석으로 명확히 써줘:
+	•	우리 설정에서 repulsion_sigma_break=1.0일 때 σ가 처음 1.0을 하회하는 전환 시점이
+	•	step 28: σ=1.0482 (ON 마지막)
+	•	step 29: σ=0.9525 (OFF 전환 직후, 처음 σ<1.0)
+	•	따라서 “repulsion이 끝난 직후 pruning”을 하려면 pruning_step=29가 맞음.
+
+구현은 step=29에 실행되도록 하되, 가능하면 내부 코드는 prev_sigma>=break && curr_sigma<break 같은 전환 감지 로직과 did_prune 플래그로 “정확히 1회”만 수행되게 만들어줘. (하드코딩 step=29에만 의존하지 않도록)
+
+⸻
+
+1) Pruning 수행 조건
+	•	pruning은 repulsion OFF 전환 직후에 딱 한 번 수행.
+	•	pruning 기준은 measurement loss로만:
+	•	4 particles 각각의 measurement loss 계산
+	•	loss가 가장 작은 top-2만 남김
+	•	diversity/DINO distance 기반 기준은 이번 구현에서 제외.
+
+⸻
+
+2) Pruning 구현 방식
+	•	기본은 slicing 방식으로 실제 배치가 4→2가 되도록 구현 (VRAM/시간 이득 목적).
+	•	slicing 시 batch dimension으로 묶여 있는 텐서들은 모두 같이 줄여야 함:
+	•	latent state (zt 등)
+	•	measurement y가 batch repeat 되어 있으면 y도 같이
+	•	이후 step에서 쓰는 per-particle buffer/trajectory 저장/metric 계산에 쓰는 텐서들
+	•	만약 slicing이 어렵거나 에러 위험이 크면, 임시 fallback으로:
+	•	“masking(탈락 particle update/grad/ODE step 제외)” 옵션을 남겨줘.
+	•	다만 기본 경로는 slicing이 되도록.
+
+⸻
+
+3) 로깅/포맷 제한 (엄격)
+	•	실행 중 metrics.json 포맷은 절대 변경하지 마 (새 필드 추가도 금지)
+	•	실행 중 repulsion.jsonl 포맷도 절대 변경하지 마
+	•	pruning 로그는 새 파일로:
+	•	pruning.jsonl을 run 디렉토리 아래에 생성/append
+	•	repulsion.jsonl과 같은 방식으로 “event 1줄 JSON”로 기록:
+	•	image_idx
+	•	prune_step (예: 29)
+	•	prev_sigma, curr_sigma, repulsion_sigma_break
+	•	losses (len=4 float list)
+	•	kept_indices (len=2 int list)
+	•	(선택) kept_losses (len=2)
+
+⸻
+
+4) 배치 크기 감소로 인한 저장/trajectory/metric 에러 주의
+	•	pruning 이후부터는 batch가 2가 되므로,
+	•	샘플/trajectory 저장 로직,
+	•	이미지 저장,
+	•	metric 집계,
+	•	per-particle indexing
+
+이런 부분에서 shape mismatch가 나지 않게 유의해줘.
+	•	repulsion은 OFF 상태라 영향 없겠지만, 기존 코드가 “항상 num_samples=4”를 가정하는 곳이 있으면 반드시 수정 필요.
+	•	단, Exp0/1/3 등 pruning이 없는 실험은 동작/결과에 어떤 영향도 없어야 함:
+	•	pruning_step=-1 또는 미사용일 때는 기존과 완전히 동일하게 동작해야 함.
+
+⸻
+
+5) 문서화
+	•	PROJECT.md의 Exp2 준비 섹션에:
+	•	pruning 트리거(왜 step29인지)
+	•	loss 계산 방식
+	•	slicing 대상(어떤 텐서들을 같이 줄였는지)
+	•	fallback masking 옵션
+	•	pruning.jsonl 포맷/저장 위치
+	•	“metrics.json/repulsion.jsonl 포맷 불변 보장”
+등 구현 세부사항을 모두 적어줘.
+⸻
+애매하거나 결정이 필요한 부분(예: measurement loss 함수 위치, 어떤 텐서들이 batch 연동인지, 저장 로직에서의 particle id 유지 방식)이 있으면 반드시 나에게 질문하고 진행해줘.
