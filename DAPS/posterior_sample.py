@@ -146,6 +146,8 @@ def sample_per_image(sampler, model, operator, evaluator, image, measurement, nu
     per_image_result = evaluator.report_per_image(image, measurement, samples)
 
     # Save individual samples
+    # Note: samples.shape[0]은 pruning 후 변경될 수 있음 (4 → 2)
+    actual_num_samples = samples.shape[0]
     if args.save_samples:
         pil_image_list = tensor_to_pils(samples)
         image_dir = safe_dir(root / 'samples')
@@ -154,16 +156,18 @@ def sample_per_image(sampler, model, operator, evaluator, image, measurement, nu
             pil_img.save(str(image_path))
 
     # Save trajectory
+    # Note: pruning 후 trajectory의 batch dimension도 줄어들 수 있음
     if args.save_traj and trajs is not None:
         traj_dir = safe_dir(root / 'trajectory')
         x0hat_traj = trajs.tensor_data['x0hat']
         x0y_traj = trajs.tensor_data['x0y']
         xt_traj = trajs.tensor_data['xt']
-        cur_resized_y = resize(y_batch, samples, args.task[args.task_group].operator.name)
+        cur_resized_y = resize(y_batch[:actual_num_samples], samples, args.task[args.task_group].operator.name)
         slices = np.linspace(0, len(x0hat_traj)-1, 10).astype(int)
         slices = np.unique(slices)
 
-        for sample_idx in range(num_samples):
+        # 실제 samples 개수 기준으로 loop (pruning 후 변경 가능)
+        for sample_idx in range(actual_num_samples):
             if args.save_traj_video:
                 video_path = str(traj_dir / '{:05d}_sample{:02d}.mp4'.format(image_idx, sample_idx))
                 save_mp4_video(samples[sample_idx], cur_resized_y[sample_idx],
@@ -176,7 +180,14 @@ def sample_per_image(sampler, model, operator, evaluator, image, measurement, nu
             traj_grid_path = str(traj_dir / '{:05d}_sample{:02d}.png'.format(image_idx, sample_idx))
             save_image(selected_traj_grid * 0.5 + 0.5, fp=traj_grid_path, nrow=len(slices))
 
-    return samples, per_image_result, trajs
+    # Pruned trajectory (탈락한 particle들의 pruning 시점까지 trajectory)
+    pruned_trajs = None
+    if hasattr(sampler, 'pruned_trajectory') and sampler.pruned_trajectory is not None:
+        pruned_trajs = sampler.pruned_trajectory.compile()
+        # 다음 이미지 처리를 위해 초기화
+        sampler.pruned_trajectory = None
+
+    return samples, per_image_result, trajs, pruned_trajs
 
 
 @hydra.main(version_base='1.3', config_path='configs', config_name='default.yaml')
@@ -253,7 +264,7 @@ def main(args):
     for img_idx in range(total_number):
         print(f'Processing image {img_idx + 1}/{total_number}')
 
-        samples, per_image_result, trajs = sample_per_image(
+        samples, per_image_result, trajs, pruned_trajs = sample_per_image(
             sampler, model, operator, evaluator,
             image=images[img_idx],
             measurement=y[img_idx],
@@ -263,10 +274,32 @@ def main(args):
             image_idx=img_idx
         )
 
-        all_samples.append(samples)  # [num_samples, C, H, W]
+        all_samples.append(samples)  # [num_samples, C, H, W] (pruning 후 줄어들 수 있음)
         per_image_results.append(per_image_result)
         if trajs is not None:
             all_trajs.append(trajs)
+
+        # Pruned trajectory 저장 (탈락한 particle들의 pruning 시점까지 trajectory)
+        if args.save_traj and pruned_trajs is not None:
+            pruned_traj_dir = safe_dir(root / 'trajectory_pruned')
+            pruned_x0hat_traj = pruned_trajs.tensor_data.get('x0hat')
+            pruned_x0y_traj = pruned_trajs.tensor_data.get('x0y')
+            pruned_xt_traj = pruned_trajs.tensor_data.get('xt')
+
+            if pruned_x0hat_traj is not None:
+                num_pruned = pruned_x0hat_traj.shape[1]  # [T, num_pruned, C, H, W]
+                slices = np.linspace(0, len(pruned_x0hat_traj)-1, 10).astype(int)
+                slices = np.unique(slices)
+
+                for pruned_idx in range(num_pruned):
+                    # save long grid images for pruned particles
+                    selected_traj_grid = torch.cat([
+                        pruned_x0y_traj[slices, pruned_idx],
+                        pruned_x0hat_traj[slices, pruned_idx],
+                        pruned_xt_traj[slices, pruned_idx]
+                    ], dim=0)
+                    traj_grid_path = str(pruned_traj_dir / '{:05d}_pruned{:02d}.png'.format(img_idx, pruned_idx))
+                    save_image(selected_traj_grid * 0.5 + 0.5, fp=traj_grid_path, nrow=len(slices))
 
         # Time logging: sampler의 timing_info 수집
         if hasattr(sampler, 'timing_info'):
@@ -291,6 +324,18 @@ def main(args):
                     log_entry_with_img = {'image_idx': img_idx, **log_entry}
                     f.write(json.dumps(log_entry_with_img) + '\n')
 
+        # ============================================================
+        # pruning.jsonl: sampler의 pruning_debug_logs 저장 (Exp 2)
+        # (metrics.json/repulsion.jsonl 포맷 불변, 새 파일로 분리)
+        # ============================================================
+        if hasattr(sampler, 'pruning_debug_logs') and sampler.pruning_debug_logs:
+            pruning_jsonl_path = root / 'pruning.jsonl'
+            with open(str(pruning_jsonl_path), 'a') as f:
+                for log_entry in sampler.pruning_debug_logs:
+                    # Add image_idx to each entry for multi-image runs
+                    log_entry_with_img = {'image_idx': img_idx, **log_entry}
+                    f.write(json.dumps(log_entry_with_img) + '\n')
+
         # Log per-image metrics
         main_metric = evaluator.main_eval_fn_name
         print(f'  Image {img_idx}: {main_metric} best={per_image_result[main_metric]["best"]:.3f}, '
@@ -303,8 +348,11 @@ def main(args):
                 'image_idx': img_idx
             })
 
-    # Stack all samples: [N, num_samples, C, H, W]
+    # Stack all samples: [N, actual_num_samples, C, H, W]
+    # Note: pruning이 적용된 경우 actual_num_samples < num_samples (예: 4→2)
+    # 모든 이미지에 동일한 pruning이 적용되므로 스택 가능
     all_samples = torch.stack(all_samples, dim=0)
+    actual_final_num_samples = all_samples.shape[1]  # pruning 후 실제 샘플 수
 
     # ============================================================
     # Time & Memory Logging: 샘플링 완료 후 측정 (TPU/CUDA 공통)
@@ -348,10 +396,20 @@ def main(args):
             if k != 'step_details'  # step_details는 너무 길어서 제외
         }
 
+    # VRAM summary (segments 기반 - Exp2 pruning, 향후 Exp4 optimization 확장 용이)
+    # 구조: {"peak_memory_mb": 10209.0, "segments": {"pre_pruning": 10150.0, "post_pruning": 6100.0}}
+    vram_summary = {
+        'peak_memory_mb': peak_memory_mb,
+        'segments': {},
+    }
+    if hasattr(sampler, 'vram_segments') and sampler.vram_segments:
+        vram_summary['segments'] = sampler.vram_segments.copy()
+
     results['metadata'] = {
         'timestamp': datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S KST'),
         'num_images': total_number,
         'num_samples': num_samples,
+        'num_samples_after_pruning': actual_final_num_samples,
         'hyperparameters': {
             'repulsion_scale': args.repulsion_scale,
             'repulsion_sigma_break': args.repulsion_sigma_break,
@@ -362,9 +420,9 @@ def main(args):
         },
         'repulsion': repulsion_summary,
         'timing': timing_summary,
+        'vram': vram_summary,
         'device': {
             'type': 'tpu' if args.use_tpu else 'cuda',
-            'peak_memory_mb': peak_memory_mb,
             **{k: v for k, v in memory_stats.items() if k != 'peak_mb'}  # 추가 메모리 정보
         }
     }
@@ -388,17 +446,18 @@ def main(args):
     if args.wandb:
         evaluator.log_wandb_overall(results)
 
-    # log grid results: [gt, y, sample0, sample1, sample2, sample3] for each image
+    # log grid results: [gt, y, sample0, sample1, ...] for each image
+    # Note: pruning 후 샘플 수가 줄어들 수 있음 (예: 4→2)
     resized_y = resize(y, images, args.task[args.task_group].operator.name)
     # Interleave: for each image, show gt, y, then all samples
     grid_rows = []
     for img_idx in range(total_number):
         grid_rows.append(images[img_idx])
         grid_rows.append(resized_y[img_idx])
-        for s in range(num_samples):
+        for s in range(actual_final_num_samples):
             grid_rows.append(all_samples[img_idx, s])
     stack = torch.stack(grid_rows, dim=0)
-    save_image(stack * 0.5 + 0.5, fp=str(root / 'grid_results.png'), nrow=2 + num_samples)
+    save_image(stack * 0.5 + 0.5, fp=str(root / 'grid_results.png'), nrow=2 + actual_final_num_samples)
 
     # save raw trajectory data
     if args.save_traj_raw_data and len(all_trajs) > 0:

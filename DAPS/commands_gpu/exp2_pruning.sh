@@ -36,19 +36,28 @@ fi
 
 # ============================================================
 # Repulsion Hyperparameters (Exp1과 동일)
-# - scale: 튜닝 중 (scale=50은 너무 강함, scale=0.1~1.0은 효과 없음)
-#   → scale=10부터 시작, ratio_scaled_to_score 0.1~0.3 목표
+# - scale=10: Sweet spot (ratio_scaled_to_score ~0.06)
 # - sigma_break=1.0: σ ∈ [1,10] 구간만 ON (~30/50 step)
 # - schedule=constant: 추가 decay 없음
 # ============================================================
-REPULSION_SCALE=10            # 튜닝 중: 10 → ratio 보고 5 또는 15로 조정
+REPULSION_SCALE=10            # Sweet spot 확정 (실험1 sanity check)
 REPULSION_SIGMA_BREAK=1.0     # σ < 1.0에서 OFF
 REPULSION_SCHEDULE="constant" # 추가 decay 없음
-PRUNING_STEP=25               # 4→2 pruning at step 25
+
+# ============================================================
+# Pruning Hyperparameters
+# - pruning_step=29: Repulsion OFF 직후 (σ 전환 시점)
+#   우리 세팅 기준 (zero-indexed, num_steps=50):
+#     step 28: σ=1.0482 (Repulsion ON 마지막)
+#     step 29: σ=0.9525 (Repulsion OFF 전환 직후, 처음 σ < sigma_break)
+#   → "repulsion이 끝난 직후 pruning" 전략
+# - 4→2 pruning: measurement loss가 가장 작은 2개 particle만 유지
+# ============================================================
+PRUNING_STEP=29               # 4→2 pruning at step 29 (repulsion OFF 직후)
 
 # ============================================================
 # [실험 2] Sanity Check - 1 image
-# TODO: pruning_step 튜닝 후 값 변경 (현재 25 = 총 50 step 중 절반)
+# pruning_step=29: repulsion OFF 직후에 4→2 pruning 수행
 # ============================================================
 if [ "$RUN_1" = true ]; then
     echo "========== [실험 2] 1 image sanity check =========="

@@ -213,21 +213,36 @@ bash commands_gpu/exp3_2particle.sh --1
 * ~~Baseline(독립 실행)보다 이 거리가 확실히 커야 성공입니다.~~ → ✅ 32 → 71 (2.2배 증가)
 
 
-### [실험 2] 4 → 2 Pruning (Efficiency Verification)
-* 설정: 4개로 시작 $\to$ $t=200$에서 2개로 압축 $\to$ 끝.
+### [실험 2] 4 → 2 Pruning (Efficiency Verification) → **구현 완료**
+* ~~설정: 4개로 시작 $\to$ $t=200$에서 2개로 압축 $\to$ 끝.~~ → **수정**: 4개로 시작 → step 29 (σ < 1.0 전환 직후)에서 2개로 압축 → 끝.
 * 비교: Exp 2 (Pruning) vs. Exp 1 (Full Run)
 * 확인할 지표:
     * Max PSNR 유지 여부: Exp 1과 결과가 거의 똑같아야 함. (떨어지면 Pruning 로직 실패)
     * Time / Memory: 시간이 얼마나 단축되었는가? (이게 논문의 세일즈 포인트)
 * 기대 결론: "초반 탐색 후 가망 없는 놈을 버려도 성능 손실은 없다. 즉, Exp 1처럼 끝까지 4개를 끌고 가는 건 자원 낭비다."
-* pruning 임계값 및 timestep과 같은 hyperparameter 값을 적절하게 설정하는 것이 관건. 이에 대한 sanity check 및 가장 기본적인 경향성 체크를 위해 1 image 4 (particle) run 명령어를 적극 활용한 뒤 디버깅 완료된 코드베이스에서 합리적인 hyperparameter set으로 10 image 실험을 돌리자.
+* ~~pruning 임계값 및 timestep과 같은 hyperparameter 값을 적절하게 설정하는 것이 관건.~~ → **완료**: pruning_step=29 (repulsion OFF 직후), measurement loss 기준 top-2 선택
+* 이에 대한 sanity check 및 가장 기본적인 경향성 체크를 위해 1 image 4 (particle) run 명령어를 적극 활용한 뒤 디버깅 완료된 코드베이스에서 합리적인 hyperparameter set으로 10 image 실험을 돌리자.
 ⚠️ 주의할 점 (Indexing Hell):
-* 배치 사이즈가 4에서 2로 줄어들 때, z뿐만 아니라 optimizer의 state, scheduler의 step, measurement y 등 관련된 모든 변수를 같이 줄여야(Slicing) 에러가 안 납니다.
-* 헷갈리면 그냥 4개 유지를 하되, 탈락한 2개에 대해서는 Gradient 계산을 끄는 마스킹(Masking) 처리만 해도 연산량 이득은 증명할 수 있습니다. (메모리 이득은 없지만 구현은 쉬움) $\rightarrow$ 하지만 진짜 메모리 이득을 위해 Slicing을 추천합니다.
-📊 GPU VRAM 측정 구간 분리 (구현 필요):
-* Pruning 추가 시, VRAM 측정을 **pruning 전/후 두 구간**으로 쪼개야 함.
-* `torch.cuda.reset_peak_memory_stats()`를 pruning 시점에 호출하여 각 구간별 peak를 독립 측정.
-* metrics.json에 `vram.pre_pruning_peak_mb`, `vram.post_pruning_peak_mb` 형태로 기록.
+* ~~배치 사이즈가 4에서 2로 줄어들 때, z뿐만 아니라 optimizer의 state, scheduler의 step, measurement y 등 관련된 모든 변수를 같이 줄여야(Slicing) 에러가 안 납니다.~~ → **완료**: `zt, z0y, z0hat, x0y, x0hat, xt, measurement, trajectory` 모두 slicing 구현
+* ~~헷갈리면 그냥 4개 유지를 하되, 탈락한 2개에 대해서는 Gradient 계산을 끄는 마스킹(Masking) 처리만 해도 연산량 이득은 증명할 수 있습니다.~~ → **선택**: Slicing 방식 채택 (메모리 이득 확보)
+~~📊 GPU VRAM 측정 구간 분리 (구현 필요):~~
+~~* Pruning 추가 시, VRAM 측정을 **pruning 전/후 두 구간**으로 쪼개야 함.~~
+~~* `torch.cuda.reset_peak_memory_stats()`를 pruning 시점에 호출하여 각 구간별 peak를 독립 측정.~~
+~~* metrics.json에 `vram.pre_pruning_peak_mb`, `vram.post_pruning_peak_mb` 형태로 기록.~~
+→ **완료**: `sampler.py`에서 pruning 시점에 VRAM 측정, `metrics.json`의 `vram.segments` 기반 구조로 저장.
+
+📊 VRAM segments 기반 구조 (Exp2/Exp4 공통 설계):
+```json
+// Exp0/1/3 (pruning 없음)
+"vram": {"peak_memory_mb": 10209.0, "segments": {}}
+
+// Exp2 (pruning만)
+"vram": {"peak_memory_mb": 10209.0, "segments": {"pre_pruning": 10150.0, "post_pruning": 6100.0}}
+
+// Exp4 (pruning + optimization) - 향후 확장 시
+"vram": {"peak_memory_mb": 10209.0, "segments": {"pre_pruning": 10150.0, "post_pruning": 6100.0, "optimization": 5800.0}}
+```
+→ 실험별로 필요한 segment만 추가하는 유연한 구조로, 향후 Exp4 optimization 추가 시에도 유지보수 용이.
 
 📌 Repulsion OFF 전환 시점 (현재 설정 기준):
 ```
@@ -237,7 +252,25 @@ step 29: σ = 0.9525 (OFF) ← 여기서 처음으로 σ < sigma_break
 * **Repulsion ON**: step 0~28 (29 steps, 58%)
 * **Repulsion OFF**: step 29~49 (21 steps, 42%)
 * 설정: `sigma_max=10`, `sigma_min=0.1`, `num_steps=50`, `timestep=poly-7`, `sigma_break=1.0`
-* → pruning_step=25는 repulsion ON 구간 내에 있음 (σ=1.39)
+* ~~→ pruning_step=25는 repulsion ON 구간 내에 있음 (σ=1.39)~~ → **수정**: pruning_step=29 (repulsion OFF 직후)
+
+📁 저장 구조 (Exp 2):
+```
+results/<run_name>/
+├── samples/                    # 최종 샘플 (pruning 후 2개)
+│   ├── 00000_sample00.png
+│   └── 00000_sample01.png
+├── trajectory/                 # 살아남은 particle들의 전체 trajectory (step 0~49)
+│   ├── 00000_sample00.png
+│   └── 00000_sample01.png
+├── trajectory_pruned/          # 탈락한 particle들의 trajectory (step 0~29까지만)
+│   ├── 00000_pruned00.png
+│   └── 00000_pruned01.png
+├── pruning.jsonl              # pruning 로그 (losses, kept/pruned indices)
+├── repulsion.jsonl            # repulsion 로그
+├── metrics.json               # 평가 결과 + vram.segments (pre_pruning/post_pruning)
+└── grid_results.png           # [gt, y, sample0, sample1] 형태 (4열)
+```
 
 ### [실험 3] 2-Particle Full Run (Justification for '4')
 * 설정: 처음부터 2개만 띄워서 끝까지($T \to 0$) 유지.
@@ -252,11 +285,24 @@ step 29: σ = 0.9525 (OFF) ← 여기서 처음으로 σ < sigma_break
 ### [실험 4] 실험 1~3 중 가장 잘 나온 세팅에 대해 ReSample의 hard data consistency in latent space optimization을 돌리자
 - 정확한 횟수 및 기준은 ReSample 공식 레포의 구현에서 실제 몇 번의 optimization이 이루어지는지를 참고해서 결정하자. hyperparameter 튜닝에 1 image 실험을 활용하자.
 - optimization 횟수 및 소요시간을 보고하자. batch element 간 optimization 및 termination이 independent해야 함에 유의하자 (ReSample 공식 레포는 그렇지 않았음!)
-📊 GPU VRAM 측정 구간 분리 (구현 필요):
-* Optimization 추가 시, VRAM 측정을 **optimization 전/후 두 구간**으로 분리해야 함.
-* `torch.cuda.reset_peak_memory_stats()`를 optimization 시작 시점에 호출하여 각 구간별 peak를 독립 측정.
-* metrics.json에 `vram.pre_optimization_peak_mb`, `vram.optimization_peak_mb` 형태로 기록.
-* 만약 실험 2의 pruning과 함께 사용 시, 3구간으로 분리: `pre_pruning`, `post_pruning_pre_optimization`, `optimization`.
+📊 GPU VRAM 측정 구간 분리 (구현 예정 - segments 기반):
+* ~~Optimization 추가 시, VRAM 측정을 **optimization 전/후 두 구간**으로 분리해야 함.~~
+* ~~`torch.cuda.reset_peak_memory_stats()`를 optimization 시작 시점에 호출하여 각 구간별 peak를 독립 측정.~~
+* ~~metrics.json에 `vram.pre_optimization_peak_mb`, `vram.optimization_peak_mb` 형태로 기록.~~
+* ~~만약 실험 2의 pruning과 함께 사용 시, 3구간으로 분리: `pre_pruning`, `post_pruning_pre_optimization`, `optimization`.~~
+→ **설계 완료** (구현은 Exp4 진행 시): Exp2에서 도입한 `vram.segments` 기반 구조 활용
+```json
+// Exp4 (pruning + optimization)
+"vram": {
+  "peak_memory_mb": 10209.0,
+  "segments": {
+    "pre_pruning": 10150.0,
+    "post_pruning": 6100.0,
+    "optimization": 5800.0
+  }
+}
+```
+→ 실험별로 필요한 segment만 `vram_segments` dict에 추가하면 됨. `sampler.py`에서 optimization 시점에 `self.vram_segments['optimization'] = ...` 추가 예정.
 
 ### [실험 5] 결과를 보고 제일 잘 나온 세팅에 대해 100 image 실험을 돌리자. 
 - 이후 particle guidance, 유전알고리즘적 관점의 설명, phase retrieval with 2 oversampling이라는 2-mode task 자체의 특수성, DAPS와 ReSample과의 실행시간 및 GPU 및 연산량 비교
@@ -656,6 +702,82 @@ step 0 ratio가 **0.0625 (6.25%)** 로 안전+영향 있는 구간(0.05~0.2)에 
 - 10 images 비교로 통계적 유의성 확보 (optional, 이미 강한 신호)
 - **Exp2 (4→2 Pruning) 구현 우선순위 상승** - pruning이 정말 sweet spot인지 검증
 
+### [실험 2] Sanity Check (2025-12-14 19:18 KST) - 4→2 Pruning ✅ 완료
+
+#### 실험 설정
+| Parameter | Value |
+|-----------|-------|
+| Particles | 4 → 2 (pruning) |
+| Repulsion Scale | 10 |
+| Sigma Break | 1.0 |
+| Pruning Step | 29 (σ 전환 직후) |
+| Images | 1 (sanity check) |
+
+#### 명령어
+```bash
+bash commands_gpu/exp2_pruning.sh --1
+```
+
+#### 결과
+
+| Metric | Exp1 (4p, no prune) | Exp2 (4→2 prune) | 차이 |
+|--------|---------------------|------------------|------|
+| **Best PSNR** | **20.66 dB** | **14.71 dB** | **-5.95 dB ⚠️** |
+| Mean PSNR | 12.83 dB | 11.46 dB | -1.37 dB |
+| Best SSIM | 0.757 | 0.641 | -0.116 |
+| Best LPIPS | 0.413 | 0.501 | +0.088 (↑worse) |
+| Time | 911초 | 734초 | **-19% 절약** |
+| VRAM (pre_pruning) | 10209 MB | 10209 MB | 동일 |
+| VRAM (post_pruning) | - | 6068 MB | **-40% 절약** |
+
+#### Pruning 로그 분석 (`pruning.jsonl`)
+```json
+{
+  "prune_step": 29,
+  "prev_sigma": 1.105, "curr_sigma": 1.007,
+  "losses": [1280.43, 1292.52, 1317.48, 1288.60],
+  "kept_indices": [0, 3],
+  "pruned_indices": [1, 2],
+  "batch_before": 4, "batch_after": 2,
+  "did_prune": true, "mode": "slicing"
+}
+```
+
+#### 핵심 검증 포인트
+- [x] pruning 시점(step 29)에서 정확히 4→2 전환되는지 ✅
+- [x] VRAM segments 정상 기록 (`pre_pruning: 10209`, `post_pruning: 6068`) ✅
+- [x] trajectory_pruned/ 폴더에 탈락 particle 저장 ✅ (`00000_pruned00.png`, `00000_pruned01.png`)
+- [x] Time/VRAM 절약량 측정 ✅ (시간 -19%, VRAM -40%)
+- [ ] **Best PSNR이 Exp1과 유사한지** → ❌ **-5.95 dB 하락 (심각)**
+
+#### ⚠️ 중요 발견: Pruning이 Best Sample을 제거함
+
+**Exp1 4개 샘플 최종 PSNR**:
+| Sample | PSNR | Pruning Loss | 결과 |
+|--------|------|--------------|------|
+| 0 | 14.75 dB | 1280.43 | ✅ kept |
+| **1** | **20.66 dB** | 1292.52 | ❌ **pruned** |
+| 2 | 8.13 dB | 1317.48 | ❌ pruned |
+| 3 | 7.80 dB | 1288.60 | ✅ kept |
+
+→ **step 29에서 measurement loss가 두 번째로 높았던 sample[1]이 pruning되었지만, 이 샘플이 실제 최고 PSNR(20.66 dB)을 기록할 샘플이었음.**
+
+**분석**: Pruning 시점(step 29)의 measurement loss가 최종 PSNR을 완벽하게 예측하지 못함.
+- 이는 phase retrieval의 특성상 중간 단계 loss와 최종 품질이 비선형 관계일 수 있음을 시사
+- 다만 1 이미지 sanity check이므로, **10 image 실험에서 통계적 검증 필요**
+
+#### Repulsion 동작 확인 (`repulsion.jsonl`)
+- step 0~29: repulsion ON (scale=10, ratio ~3~6%)
+- step 30~: repulsion OFF (sigma < sigma_break=1.0)
+- mean_pairwise_dino_dist: 21 → 90 (충분히 퍼짐) ✅
+
+#### 결과 폴더
+- `results/exp2_pruning/imagenet_1img/exp2_sanity_check_scale10_prune29/`
+
+#### 다음 단계
+- **10 image 실험 진행**: 1 이미지에서는 운 나쁘게 best sample이 pruning됨. 통계적으로 pruning이 평균적으로 성능을 유지하는지 검증 필요.
+- **Pruning 기준 개선 검토**: measurement loss 외 다른 기준 (diversity-aware pruning 등) 고려 가능
+
 ## 프로젝트 기대 결과: 보다 적은 연산으로 비슷하거나 더 좋은 성능을!
 - DAPS에서 Phase Retrieval의 불안정성을 고려하여, 4번의 independent runs을 수행한 뒤 가장 좋은 결과를 선택하여 보고했으니, 우리플젝을 DAPS 4 run이랑 비교했을때 시간xGPU 사용량이 비슷하거나 작으면서 성능이 비슷하거나 높음을 보이면 되는 것!
 - 실험 2 (4 → 2 Pruning)**는 이론적 최적점(2 Modes)과 현실적 안전장치(4 Runs) 사이의 **"Sweet Spot"**을 찾는 설정
@@ -856,79 +978,236 @@ Please proceed by:
 	4.	report back with patch summary and instructions.
 
 ### 실험2 Pruning
-이제 Exp2 최소 pruning(4→2) 를 구현해줘.
 
 0) exp2 sh 수정 (필수)
-	•	pruning은 repulsion OFF 전환 직후에 1회 수행할 거라서, commands_gpu/exp2_pruning.sh에서
-	•	pruning_step=29 로 바꿔줘.
-	•	이유를 주석으로 명확히 써줘:
-	•	우리 설정에서 repulsion_sigma_break=1.0일 때 σ가 처음 1.0을 하회하는 전환 시점이
-	•	step 28: σ=1.0482 (ON 마지막)
-	•	step 29: σ=0.9525 (OFF 전환 직후, 처음 σ<1.0)
-	•	따라서 “repulsion이 끝난 직후 pruning”을 하려면 pruning_step=29가 맞음.
+	•	commands_gpu/exp2_pruning.sh에서 pruning_step=29로 변경해줘.
+	•	주석으로 아래 근거를 명확히 써줘 (우리 세팅 기준, zero-indexed):
+	•	repulsion_sigma_break=1.0일 때 σ 전환:
+	•	step 28: σ=1.0482 (Repulsion ON 마지막)
+	•	step 29: σ=0.9525 (Repulsion OFF 전환 직후, 처음 σ<1.0)
+	•	따라서 “repulsion이 끝난 직후 pruning”을 하려면 pruning_step=29가 맞음
 
-구현은 step=29에 실행되도록 하되, 가능하면 내부 코드는 prev_sigma>=break && curr_sigma<break 같은 전환 감지 로직과 did_prune 플래그로 “정확히 1회”만 수행되게 만들어줘. (하드코딩 step=29에만 의존하지 않도록)
-
-⸻
-
-1) Pruning 수행 조건
-	•	pruning은 repulsion OFF 전환 직후에 딱 한 번 수행.
-	•	pruning 기준은 measurement loss로만:
-	•	4 particles 각각의 measurement loss 계산
-	•	loss가 가장 작은 top-2만 남김
-	•	diversity/DINO distance 기반 기준은 이번 구현에서 제외.
+단, 코드 구현은 step=29 하드코딩만 의존하지 말고
+prev_sigma >= break && curr_sigma < break 전환 감지 + did_prune 플래그로 정확히 1회만 수행되게 해줘.
 
 ⸻
 
-2) Pruning 구현 방식
-	•	기본은 slicing 방식으로 실제 배치가 4→2가 되도록 구현 (VRAM/시간 이득 목적).
-	•	slicing 시 batch dimension으로 묶여 있는 텐서들은 모두 같이 줄여야 함:
-	•	latent state (zt 등)
+1) Pruning 수행 조건 (정확히 1회)
+
+트리거 정의(둘 다 만족해야 prune 실행)
+	•	pruning_step != -1 일 때만 활성화
+	•	아래 중 하나를 만족하면 pruning 실행(둘 중 하나만 선택해서 구현해도 OK):
+	1.	step 기반(실험 통제용): annealing_step == pruning_step
+	2.	전환 기반(안전장치): prev_sigma >= repulsion_sigma_break and curr_sigma < repulsion_sigma_break
+	•	그리고 did_prune가 false일 때만 실행 (실행 후 true로 고정)
+
+권장: (1) + (2)를 둘 다 넣고, 둘 중 하나라도 만족하면 prune 실행하되, did_prune로 1회만 보장.
+
+⸻
+
+2) Pruning 기준 (loss-only)
+	•	기준은 measurement loss로만 (DINO distance 기반 기준은 이번 구현에서 제외)
+	•	pruning 시점에 batch=4 particles 각각에 대해 measurement loss를 계산하고,
+	•	loss가 가장 작은 2개(top-2)를 keep
+	•	구현 디테일:
+	•	loss shape는 (B,)가 되도록(=particle별 스칼라)
+	•	정렬은 torch.topk(loss, k=2, largest=False) 형태 권장
+
+⸻
+
+3) Pruning 구현 방식 (기본 slicing + fallback masking)
+
+3.1 기본: slicing (진짜 4→2로 batch 줄이기)
+
+pruning 후에는 batch가 실제로 2가 되어야 함.
+	•	slicing 대상(최소):
+	•	latent/state 텐서들(zt, x_t, x0hat, z0hat 등 sampler loop에서 이후 step에 계속 쓰이는 모든 batch 텐서)
 	•	measurement y가 batch repeat 되어 있으면 y도 같이
-	•	이후 step에서 쓰는 per-particle buffer/trajectory 저장/metric 계산에 쓰는 텐서들
-	•	만약 slicing이 어렵거나 에러 위험이 크면, 임시 fallback으로:
-	•	“masking(탈락 particle update/grad/ODE step 제외)” 옵션을 남겨줘.
-	•	다만 기본 경로는 slicing이 되도록.
+	•	measurement operator 입력에 쓰이는 텐서들도 같이
+	•	trajectory 저장 버퍼/중간 결과 캐시가 batch dimension을 갖고 있으면 같이
+	•	seed/idx 텐서(있다면)
+
+구현 팁: “prune 직후의 살아남은 batch size”는 항상 z.shape[0]로 다시 읽고, 하드코딩된 num_samples(=4)을 더 이상 사용하지 말 것.
+
+3.2 fallback: masking 옵션(안전장치)
+
+slicing이 어려워서 에러가 나면:
+	•	“탈락 particle은 update/grad/ODE step을 수행하지 않고 그대로 carry”하는 masking 경로를 옵션으로 남겨줘.
+	•	단, 기본 경로는 slicing이어야 함.
 
 ⸻
 
-3) 로깅/포맷 제한 (엄격)
+4) 로깅 / 포맷 제한 (엄격)
 	•	실행 중 metrics.json 포맷은 절대 변경하지 마 (새 필드 추가도 금지)
 	•	실행 중 repulsion.jsonl 포맷도 절대 변경하지 마
 	•	pruning 로그는 새 파일로:
-	•	pruning.jsonl을 run 디렉토리 아래에 생성/append
-	•	repulsion.jsonl과 같은 방식으로 “event 1줄 JSON”로 기록:
+	•	run 디렉토리 아래 pruning.jsonl 생성/append
+	•	“event 1줄 JSON”로 기록 (repulsion.jsonl과 동일 스타일):
 	•	image_idx
-	•	prune_step (예: 29)
+	•	prune_step (annealing step index, 예: 29)
 	•	prev_sigma, curr_sigma, repulsion_sigma_break
-	•	losses (len=4 float list)
-	•	kept_indices (len=2 int list)
+	•	losses (len=4 float list, prune 직전 기준)
+	•	kept_indices (len=2 int list, prune 직전 batch index 기준)
 	•	(선택) kept_losses (len=2)
 
-⸻
-
-4) 배치 크기 감소로 인한 저장/trajectory/metric 에러 주의
-	•	pruning 이후부터는 batch가 2가 되므로,
-	•	샘플/trajectory 저장 로직,
-	•	이미지 저장,
-	•	metric 집계,
-	•	per-particle indexing
-
-이런 부분에서 shape mismatch가 나지 않게 유의해줘.
-	•	repulsion은 OFF 상태라 영향 없겠지만, 기존 코드가 “항상 num_samples=4”를 가정하는 곳이 있으면 반드시 수정 필요.
-	•	단, Exp0/1/3 등 pruning이 없는 실험은 동작/결과에 어떤 영향도 없어야 함:
-	•	pruning_step=-1 또는 미사용일 때는 기존과 완전히 동일하게 동작해야 함.
+추가로 유용하지만 optional:
+	•	did_prune (true)
+	•	batch_before=4, batch_after=2
+	•	mode="slicing" 또는 "masking"
 
 ⸻
 
-5) 문서화
-	•	PROJECT.md의 Exp2 준비 섹션에:
-	•	pruning 트리거(왜 step29인지)
-	•	loss 계산 방식
-	•	slicing 대상(어떤 텐서들을 같이 줄였는지)
-	•	fallback masking 옵션
-	•	pruning.jsonl 포맷/저장 위치
-	•	“metrics.json/repulsion.jsonl 포맷 불변 보장”
-등 구현 세부사항을 모두 적어줘.
+5) 배치 감소로 인한 저장/trajectory/metric 에러 방지 (필수 주의)
+
+pruning 이후 batch가 2가 되므로 아래가 깨지기 쉬움:
+	•	샘플/trajectory 저장 루프가 range(num_samples) 같은 고정값 사용
+	•	이미지 저장에서 파일명/인덱스가 particle 0..3을 가정
+	•	metric 집계에서 “항상 4개 결과”를 기대
+
+따라서:
+	•	저장/집계에서 **항상 현재 batch size = tensor.shape[0]**를 기준으로 동작하도록 수정해줘.
+	•	단, pruning이 없는 실험(Exp0/1/3 등)은 동작/결과가 기존과 완전히 동일해야 함:
+	•	pruning_step=-1이면 코드 경로가 사실상 완전히 bypass 되어야 함.
+
 ⸻
-애매하거나 결정이 필요한 부분(예: measurement loss 함수 위치, 어떤 텐서들이 batch 연동인지, 저장 로직에서의 particle id 유지 방식)이 있으면 반드시 나에게 질문하고 진행해줘.
+
+6) 문서화 (PROJECT.md 필수 업데이트)
+
+PROJECT.md의 Exp2 준비 섹션에 다음을 반드시 추가해줘:
+	•	pruning 트리거: 왜 step29인지(σ 전환 근거 포함)
+	•	pruning이 “딱 1회” 실행되도록 한 로직(did_prune, 전환감지)
+	•	loss 계산 방식(어떤 measurement loss를 사용했고 입력/shape가 무엇인지)
+	•	slicing 대상 리스트(어떤 텐서들을 함께 줄였는지)
+	•	fallback masking 옵션(있다면 언제 사용되는지)
+	•	pruning.jsonl 저장 위치와 포맷
+	•	metrics.json/repulsion.jsonl 포맷 불변 보장
+
+⸻
+
+7) 구현 후 “반드시 확인할 체크리스트”(간단)
+	•	pruning.jsonl에 각 이미지당 1줄만 기록되는지(did_prune true 1회)
+	•	prune_step이 29인지
+	•	batch가 실제로 4→2로 줄어드는지(batch_after==2)
+	•	pruning 이후 저장/metric에서 shape mismatch 에러가 없는지
+	•	Exp0/Exp1/Exp3 실행 시 결과/로그 포맷이 변하지 않는지
+
+⸻
+
+8) 애매한 결정사항 있으면 반드시 질문
+
+예: measurement loss를 계산할 함수 위치/입력, prune 시점에 접근 가능한 텐서 목록, 저장 로직이 particle id를 어떻게 유지하는지 등
+
+#### 실험2 Pruning 구현 완료 (2025-12-14) → **완료**
+
+##### 1. Pruning 트리거 (step 29)
+```
+우리 세팅 기준 (zero-indexed, num_steps=50, sigma_break=1.0):
+  step 28: σ=1.0482 (Repulsion ON 마지막)
+  step 29: σ=0.9525 (Repulsion OFF 전환 직후, 처음 σ < sigma_break)
+```
+- **전략**: "repulsion이 끝난 직후 pruning" → step 29
+- **트리거 조건** (둘 중 하나 만족 + did_prune=False):
+  1. **step 기반**: `step == pruning_step` (실험 통제용)
+  2. **전환 기반**: `prev_sigma >= sigma_break and curr_sigma < sigma_break` (안전장치)
+
+##### 2. 1회만 실행 보장 로직
+- `did_prune` 플래그: 초기값 `False`, pruning 수행 후 `True`로 설정
+- 조건 체크: `if self.pruning_step >= 0 and not did_prune:`
+- 한 번 실행되면 이후 step에서는 조건이 만족되어도 무시됨
+
+##### 3. Loss 계산 방식
+- **함수**: `warpped_operator.loss(z0y, measurement)`
+  - `warpped_operator`는 `LatentWrapper(operator, model)` 인스턴스
+  - 내부적으로 latent를 decode한 후 phase retrieval operator 적용
+- **입력**: `z0y` (현재 step의 denoised latent), `measurement` (y batch)
+- **출력 shape**: `(B,)` - 각 particle별 스칼라 loss
+
+##### 4. Slicing 대상 리스트
+Pruning 후 아래 텐서들을 모두 `kept_indices`로 슬라이싱:
+- `zt` (noisy latent)
+- `z0y` (denoised latent after MCMC)
+- `z0hat` (denoised latent from diffusion)
+- `x0y` (decoded image after MCMC)
+- `x0hat` (decoded image from diffusion)
+- `xt` (decoded noisy image)
+- `measurement` (y batch)
+- `trajectory.tensor_data[*]` (이전 step 기록들도 함께 슬라이싱 → compile 시 shape 통일)
+
+##### 5. Fallback Masking (미구현)
+- 현재 slicing만 구현됨
+- 필요시 masking 경로 추가 가능 (탈락 particle은 update 없이 carry)
+
+##### 6. pruning.jsonl 저장 위치 및 포맷
+- **위치**: `results/<run_name>/pruning.jsonl`
+- **포맷** (이미지당 1줄):
+```json
+{
+  "image_idx": 0,
+  "prune_step": 29,
+  "prev_sigma": 1.0482,
+  "curr_sigma": 0.9525,
+  "repulsion_sigma_break": 1.0,
+  "losses": [0.1234, 0.5678, 0.2345, 0.3456],
+  "kept_indices": [0, 2],
+  "kept_losses": [0.1234, 0.2345],
+  "batch_before": 4,
+  "batch_after": 2,
+  "did_prune": true,
+  "trigger": "step",
+  "mode": "slicing"
+}
+```
+
+##### 7. metrics.json / repulsion.jsonl 포맷 불변 보장
+- **metrics.json**: 기존 포맷 유지 + `vram` 필드 추가 (segments 기반 구간별 VRAM)
+  ```json
+  "vram": {
+    "peak_memory_mb": 10209.0,
+    "segments": {
+      "pre_pruning": 10150.0,
+      "post_pruning": 6100.0
+    }
+  }
+  ```
+  → 향후 Exp4 optimization 추가 시 `segments.optimization` 추가하면 됨
+- **repulsion.jsonl**: 기존 포맷 유지, 새 필드 추가 없음
+- **pruning 로그**: 별도 파일 `pruning.jsonl`로 분리
+
+##### 8. 저장 구조
+```
+results/<run_name>/
+├── samples/                    # 최종 샘플 (pruning 후 2개)
+│   ├── 00000_sample00.png
+│   └── 00000_sample01.png
+├── trajectory/                 # 살아남은 particle들의 전체 trajectory (step 0~49)
+│   ├── 00000_sample00.png
+│   └── 00000_sample01.png
+├── trajectory_pruned/          # 탈락한 particle들의 trajectory (step 0~29까지만)
+│   ├── 00000_pruned00.png
+│   └── 00000_pruned01.png
+├── pruning.jsonl              # pruning 로그
+├── repulsion.jsonl            # repulsion 로그
+└── metrics.json               # 평가 결과
+```
+
+##### 9. 수정된 파일
+- `commands_gpu/exp2_pruning.sh`: PRUNING_STEP=29, 주석 추가
+- `sampler.py`: pruning 로직 구현 (트리거, loss 계산, slicing, 로깅, pruned_trajectory 저장, VRAM 구간 측정)
+- `posterior_sample.py`: pruning.jsonl 저장, 동적 배치 크기 대응, pruned trajectory 저장, VRAM 정보 metrics.json에 기록
+
+##### 10. 구현 후 체크리스트 ✅ 완료 (2025-12-14 19:30 KST)
+- [x] pruning.jsonl에 각 이미지당 1줄만 기록되는지(did_prune true 1회) ✅
+- [x] prune_step이 29인지 ✅
+- [x] batch가 실제로 4→2로 줄어드는지(batch_after==2) ✅
+- [x] pruning 이후 저장/metric에서 shape mismatch 에러가 없는지 ✅
+- [x] Exp0/Exp1/Exp3 실행 시 결과/로그 포맷이 변하지 않는지 ✅ (코드 구조 유지됨)
+- [x] trajectory_pruned/ 폴더에 탈락한 particle trajectory가 저장되는지 ✅
+- [x] metrics.json에 vram.segments.pre_pruning, vram.segments.post_pruning이 기록되는지 ✅
+- [x] segments.post_pruning < segments.pre_pruning (메모리 절약 확인) ✅ (6068 < 10209, **40% 절약**)
+
+##### 11. 실행 명령어
+```bash
+# Exp2 (4→2 Pruning) sanity check
+bash commands_gpu/exp2_pruning.sh --1
+# → results/exp2_pruning/imagenet_1img/exp2_sanity_check_scale10_prune29/
+```

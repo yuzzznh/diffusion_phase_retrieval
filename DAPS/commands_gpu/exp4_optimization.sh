@@ -34,6 +34,8 @@ if [ "$RUN_1" = false ] && [ "$RUN_10" = false ] && [ "$RUN_90" = false ]; then
     exit 0
 fi
 
+# TODO exp 1/2/3에서 결정된 Hyperparameter 값을 가져와서 반영할 것!
+
 # ============================================================
 # Repulsion Hyperparameters (Exp1과 동일)
 # - scale: 튜닝 중 (scale=50은 너무 강함, scale=0.1~1.0은 효과 없음)

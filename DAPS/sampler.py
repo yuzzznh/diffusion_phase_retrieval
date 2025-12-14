@@ -3,6 +3,7 @@ import tqdm
 import torch
 import numpy as np
 import torch.nn as nn
+from typing import Dict, List, Optional, Tuple
 from cores.trajectory import Trajectory
 from cores.scheduler import get_diffusion_scheduler, DiffusionPFODE
 from cores.mcmc import MCMCSampler
@@ -208,6 +209,13 @@ class LatentDAPS(DAPS):
         # Repulsion module will be initialized lazily in sample()
         self._repulsion_module = None
 
+        # Pruning configuration (Exp 2)
+        # sigma_break is used to detect sigma transition for pruning timing
+        self.repulsion_sigma_break = repulsion_sigma_break
+
+        # Pruning debug logs (for pruning.jsonl)
+        self.pruning_debug_logs: List[Dict] = []
+
     def sample(self, model, z_start, operator, measurement, evaluator=None, record=False, verbose=False, **kwargs):
         """
         Performs sampling using LatentDAPS in latent space, decoding intermediate results.
@@ -265,6 +273,19 @@ class LatentDAPS(DAPS):
         # ============================================================
         self.repulsion_debug_logs = []
         always_log_steps = {0, 1, 2, 5, 10}
+
+        # ============================================================
+        # Pruning State (Exp 2)
+        # - did_prune: 정확히 1회만 pruning 수행을 보장하는 플래그
+        # - prev_sigma: sigma 전환 감지를 위한 이전 step sigma 저장
+        # - pruning 후 measurement도 함께 slice되어야 함
+        # - VRAM 측정: segments 기반 구간별 peak 독립 측정
+        #   (향후 Exp4 optimization 추가 시에도 유지보수 용이하도록 설계)
+        # ============================================================
+        did_prune = False
+        prev_sigma = None
+        self.pruning_debug_logs = []  # Reset for each image
+        self.vram_segments = {}  # segments 기반 VRAM 측정 (예: {'pre_pruning': 10150.0, 'post_pruning': 6100.0})
 
         def should_log_step(step: int) -> bool:
             if step in always_log_steps:
@@ -384,17 +405,124 @@ class LatentDAPS(DAPS):
             with torch.no_grad():
                 xt = model.decode(zt)
 
-            # TODO [실험 2]: Pruning 적용
-            # if (self.pruning_step >= 0) and (step == self.pruning_step):
-            #     zt, measurement = self._prune_particles(zt, measurement, ...)
+            # ============================================================
+            # [실험 2] Pruning 적용
+            # 트리거 조건 (둘 중 하나 만족 + did_prune=False):
+            #   1. step 기반: step == pruning_step
+            #   2. 전환 기반: prev_sigma >= sigma_break and curr_sigma < sigma_break
+            # 기준: measurement loss가 가장 작은 2개 particle만 유지 (slicing)
+            # ============================================================
+            if self.pruning_step >= 0 and not did_prune:
+                # 전환 기반 트리거 체크
+                sigma_transition_triggered = (
+                    prev_sigma is not None and
+                    prev_sigma >= self.repulsion_sigma_break and
+                    sigma_val < self.repulsion_sigma_break
+                )
+                # step 기반 트리거 체크
+                step_triggered = (step == self.pruning_step)
+
+                if step_triggered or sigma_transition_triggered:
+                    # ============================================================
+                    # VRAM 측정: Pruning 전 peak 기록 후 reset (segments 기반)
+                    # ============================================================
+                    if torch.cuda.is_available() and not self.use_tpu:
+                        self.vram_segments['pre_pruning'] = torch.cuda.max_memory_allocated() / (1024 * 1024)
+                        torch.cuda.reset_peak_memory_stats()
+
+                    # Pruning 수행
+                    batch_size_before = zt.shape[0]
+                    keep_k = 2  # 4 → 2 pruning
+
+                    if batch_size_before > keep_k:
+                        # measurement loss 계산: warpped_operator.loss()는 (B,) shape 반환
+                        with torch.no_grad():
+                            # z0y를 기준으로 loss 계산 (현재 step의 denoised latent)
+                            losses = warpped_operator.loss(z0y, measurement)  # shape: (B,)
+
+                        # loss가 가장 작은 top-k 선택 (largest=False)
+                        _, kept_indices = torch.topk(losses, k=keep_k, largest=False)
+                        kept_indices = kept_indices.sort().values  # 인덱스 정렬 (일관성)
+
+                        # Slicing: 관련 텐서들 모두 줄이기
+                        zt = zt[kept_indices]
+                        z0y = z0y[kept_indices]
+                        z0hat = z0hat[kept_indices]
+                        x0y = x0y[kept_indices]
+                        x0hat = x0hat[kept_indices]
+                        xt = xt[kept_indices]
+                        measurement = measurement[kept_indices]
+
+                        # 탈락한 particle indices 계산 (logging과 trajectory 모두에 사용)
+                        kept_indices_cpu = kept_indices.cpu()
+                        all_indices = set(range(batch_size_before))
+                        pruned_indices_list = sorted(all_indices - set(kept_indices_cpu.tolist()))
+
+                        # Trajectory도 함께 슬라이싱 (이전 step들의 기록도 batch dimension 맞춤)
+                        # 이렇게 하지 않으면 compile() 시 torch.stack에서 shape mismatch 발생
+                        if record and hasattr(self, 'trajectory'):
+                            pruned_indices_cpu = torch.tensor(pruned_indices_list)
+
+                            # 탈락한 particle들의 trajectory를 별도 저장 (pruning 시점까지)
+                            self.pruned_trajectory = Trajectory()
+                            for key in self.trajectory.tensor_data:
+                                self.pruned_trajectory.tensor_data[key] = [
+                                    t[pruned_indices_cpu] for t in self.trajectory.tensor_data[key]
+                                ]
+                            # value_data도 복사 (sigma 등)
+                            for key in self.trajectory.value_data:
+                                self.pruned_trajectory.value_data[key] = self.trajectory.value_data[key].copy()
+
+                            # 살아남은 particle들의 trajectory만 유지
+                            for key in self.trajectory.tensor_data:
+                                self.trajectory.tensor_data[key] = [
+                                    t[kept_indices_cpu] for t in self.trajectory.tensor_data[key]
+                                ]
+
+                        # Logging
+                        prune_log_entry = {
+                            'prune_step': step,
+                            'prev_sigma': prev_sigma if prev_sigma is not None else sigma_val,
+                            'curr_sigma': sigma_val,
+                            'repulsion_sigma_break': self.repulsion_sigma_break,
+                            'losses': losses.cpu().tolist(),
+                            'kept_indices': kept_indices.cpu().tolist(),
+                            'pruned_indices': pruned_indices_list,
+                            'kept_losses': losses[kept_indices].cpu().tolist(),
+                            'pruned_losses': [losses[i].item() for i in pruned_indices_list],
+                            'batch_before': batch_size_before,
+                            'batch_after': zt.shape[0],
+                            'did_prune': True,
+                            'trigger': 'step' if step_triggered else 'sigma_transition',
+                            'mode': 'slicing',
+                        }
+                        self.pruning_debug_logs.append(prune_log_entry)
+
+                        if verbose:
+                            print(f"[Pruning] step={step}, sigma={sigma_val:.4f}, "
+                                  f"batch: {batch_size_before} → {zt.shape[0]}, "
+                                  f"kept_indices={kept_indices.cpu().tolist()}, "
+                                  f"losses={[f'{l:.4f}' for l in losses.cpu().tolist()]}")
+
+                    did_prune = True  # 1회만 수행
+
+            # prev_sigma 업데이트 (다음 step의 전환 감지용)
+            prev_sigma = sigma_val
 
             # 4. evaluation
             x0hat_results = x0y_results = {}
             if evaluator and 'gt' in kwargs:
                 with torch.no_grad():
                     gt = kwargs['gt']
-                    x0hat_results = evaluator(gt, measurement, x0hat)
-                    x0y_results = evaluator(gt, measurement, x0y)
+                    # Pruning 후 batch size가 줄었을 경우 gt도 맞춰서 슬라이싱
+                    # (gt는 이미지 배치, 처음에 num_samples로 복제됨)
+                    current_batch_size = x0hat.shape[0]
+                    if gt.shape[0] != current_batch_size:
+                        gt_eval = gt[:current_batch_size]
+                    else:
+                        gt_eval = gt
+                    x0hat_results = evaluator(gt_eval, measurement, x0hat)
+                    x0y_results = evaluator(gt_eval, measurement, x0y)
 
                 # record
                 if verbose:
@@ -434,6 +562,15 @@ class LatentDAPS(DAPS):
                       f"total time: {self.repulsion_info['repulsion_total_time_seconds']:.2f}s")
         else:
             self.repulsion_info = {'repulsion_enabled': False}
+
+        # ============================================================
+        # VRAM 측정: Pruning 후 구간 peak 기록 (Exp 2, segments 기반)
+        # ============================================================
+        if self.pruning_step >= 0 and did_prune:
+            if torch.cuda.is_available() and not self.use_tpu:
+                self.vram_segments['post_pruning'] = torch.cuda.max_memory_allocated() / (1024 * 1024)
+            if verbose and self.vram_segments:
+                print(f"[VRAM] segments: {self.vram_segments}")
 
         return xt
 

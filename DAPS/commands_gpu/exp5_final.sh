@@ -29,6 +29,8 @@ if [ "$RUN_IMAGENET" = false ] && [ "$RUN_FFHQ" = false ]; then
     exit 0
 fi
 
+# TODO exp 1/2/3에서 결정된 Hyperparameter 값을 가져와서 반영할 것!
+
 # ============================================================
 # Repulsion Hyperparameters
 # NOTE: 실험 1~4 결과 보고 best hyperparameter로 업데이트
