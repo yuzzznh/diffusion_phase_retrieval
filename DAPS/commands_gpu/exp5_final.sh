@@ -32,13 +32,16 @@ fi
 # ============================================================
 # Repulsion Hyperparameters
 # NOTE: 실험 1~4 결과 보고 best hyperparameter로 업데이트
-# - scale=50: RLSD gamma=50 (HDR task) 기준
+# - scale: 튜닝 중 (scale=50은 너무 강함, scale=0.1~1.0은 효과 없음)
+#   → scale=10부터 시작, ratio_scaled_to_score 0.1~0.3 목표
 # - sigma_break=1.0: σ ∈ [1,10] 구간만 ON (~30/50 step)
-# - schedule=constant: 추가 decay 없음 (σ-decay는 score→ε 변환에서 자연 발생)
+# - schedule=constant: 추가 decay 없음
 # ============================================================
-REPULSION_SCALE=50            # RLSD gamma 기준
+REPULSION_SCALE=10            # 튜닝 중: 10 → ratio 보고 5 또는 15로 조정
 REPULSION_SIGMA_BREAK=1.0     # σ < 1.0에서 OFF
 REPULSION_SCHEDULE="constant" # 추가 decay 없음
+PRUNING_STEP=25               # 4→2 pruning at step 25
+OPTIMIZATION_STEP=25          # latent optimization from step 25
 
 # ============================================================
 # [실험 5] ImageNet 90 images - Best Setting (10~99, 앞 10개는 다른 실험에서 사용)
@@ -58,11 +61,11 @@ if [ "$RUN_IMAGENET" = true ]; then
     repulsion_scale=${REPULSION_SCALE} \
     repulsion_sigma_break=${REPULSION_SIGMA_BREAK} \
     repulsion_schedule=${REPULSION_SCHEDULE} \
-    pruning_step=25 \
-    optimization_step=25 \
+    pruning_step=${PRUNING_STEP} \
+    optimization_step=${OPTIMIZATION_STEP} \
     data.start_id=10 \
     data.end_id=100 \
-    name=exp5_imagenet_90img \
+    name=exp5_imagenet_90img_scale${REPULSION_SCALE}_prune${PRUNING_STEP}_opt${OPTIMIZATION_STEP} \
     gpu=0
 fi
 
@@ -85,10 +88,10 @@ if [ "$RUN_FFHQ" = true ]; then
     repulsion_scale=${REPULSION_SCALE} \
     repulsion_sigma_break=${REPULSION_SIGMA_BREAK} \
     repulsion_schedule=${REPULSION_SCHEDULE} \
-    pruning_step=25 \
-    optimization_step=25 \
+    pruning_step=${PRUNING_STEP} \
+    optimization_step=${OPTIMIZATION_STEP} \
     data.end_id=100 \
-    name=exp5_ffhq_100img \
+    name=exp5_ffhq_100img_scale${REPULSION_SCALE}_prune${PRUNING_STEP}_opt${OPTIMIZATION_STEP} \
     gpu=0
 fi
 

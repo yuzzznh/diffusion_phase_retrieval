@@ -36,13 +36,15 @@ fi
 
 # ============================================================
 # Repulsion Hyperparameters (Exp1과 동일)
-# - scale=50: RLSD gamma=50 (HDR task) 기준
+# - scale: 튜닝 중 (scale=50은 너무 강함, scale=0.1~1.0은 효과 없음)
+#   → scale=10부터 시작, ratio_scaled_to_score 0.1~0.3 목표
 # - sigma_break=1.0: σ ∈ [1,10] 구간만 ON (~30/50 step)
-# - schedule=constant: 추가 decay 없음 (σ-decay는 score→ε 변환에서 자연 발생)
+# - schedule=constant: 추가 decay 없음
 # ============================================================
-REPULSION_SCALE=50            # RLSD gamma 기준
+REPULSION_SCALE=10            # 튜닝 중: 10 → ratio 보고 5 또는 15로 조정
 REPULSION_SIGMA_BREAK=1.0     # σ < 1.0에서 OFF
 REPULSION_SCHEDULE="constant" # 추가 decay 없음
+PRUNING_STEP=25               # 4→2 pruning at step 25
 
 # ============================================================
 # [실험 2] Sanity Check - 1 image
@@ -63,10 +65,10 @@ if [ "$RUN_1" = true ]; then
     repulsion_scale=${REPULSION_SCALE} \
     repulsion_sigma_break=${REPULSION_SIGMA_BREAK} \
     repulsion_schedule=${REPULSION_SCHEDULE} \
-    pruning_step=25 \
+    pruning_step=${PRUNING_STEP} \
     optimization_step=-1 \
     data.end_id=1 \
-    name=exp2_sanity_check \
+    name=exp2_sanity_check_scale${REPULSION_SCALE}_prune${PRUNING_STEP} \
     gpu=0
 fi
 
@@ -88,10 +90,10 @@ if [ "$RUN_10" = true ]; then
     repulsion_scale=${REPULSION_SCALE} \
     repulsion_sigma_break=${REPULSION_SIGMA_BREAK} \
     repulsion_schedule=${REPULSION_SCHEDULE} \
-    pruning_step=25 \
+    pruning_step=${PRUNING_STEP} \
     optimization_step=-1 \
     data.end_id=10 \
-    name=exp2_10img \
+    name=exp2_10img_scale${REPULSION_SCALE}_prune${PRUNING_STEP} \
     gpu=0
 fi
 
@@ -113,11 +115,11 @@ if [ "$RUN_90" = true ]; then
     repulsion_scale=${REPULSION_SCALE} \
     repulsion_sigma_break=${REPULSION_SIGMA_BREAK} \
     repulsion_schedule=${REPULSION_SCHEDULE} \
-    pruning_step=25 \
+    pruning_step=${PRUNING_STEP} \
     optimization_step=-1 \
     data.start_id=10 \
     data.end_id=100 \
-    name=exp2_90img \
+    name=exp2_90img_scale${REPULSION_SCALE}_prune${PRUNING_STEP} \
     gpu=0
 fi
 
