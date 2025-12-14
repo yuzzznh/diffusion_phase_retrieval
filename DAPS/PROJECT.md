@@ -120,6 +120,35 @@ sigma:  10 -------- 1.0 -------- 0.001
 **RLSD와 비교**: RLSD는 `sigma_break=999` (DDPM timestep)로 **거의 전 구간 ON**.
 우리도 더 오래 켜두려면 `sigma_break`를 낮추면 됨 (예: 0.1 또는 0.01).
 
+#### Shell Script 수정 (2025-12-14) - RLSD 유사 세팅
+
+**배경**: 이전 실험(scale=0.5, 1.0)에서 repulsion 효과가 거의 없었음 (pairwise distance ~32로 동일).
+RLSD와 최대한 유사하게 맞추기 위해 hyperparameter 및 주석 수정.
+
+**수정 내용** (`exp1_repulsion.sh` ~ `exp5_final.sh` 전체):
+```bash
+REPULSION_SCALE=50            # RLSD gamma=50 (HDR task) 기준
+REPULSION_SIGMA_BREAK=1.0     # σ < 1.0에서 OFF
+REPULSION_SCHEDULE="constant" # 추가 decay 없음
+```
+
+**주석 수정 (엄밀성 강화)**:
+- ~~"RLSD-동형 세팅"~~ → "RLSD gamma 기준" (완전 동형은 아님)
+- ~~"자동 decay"~~ → "σ-decay는 score→ε 변환에서 자연 발생"
+  - 정확히는: EDM score-ε 변환 관계에 의해 ε 관점에서 step별 σ가 곱해지는 효과가 나타남
+  - 이것이 RLSD의 `gamma × sqrt(1-α_t)` (≈ `gamma × σ`)와 유사해지는 원리
+- `sigma_break=1.0`은 σ ∈ [1,10] 구간만 ON (~30/50 step)
+  - RLSD는 보통 더 오래 켜둠. 더 긴 ON 원하면 0.1 또는 0.01로 낮추기
+
+**의도**:
+1. `schedule=constant`: 추가 decay 제거 → RLSD처럼 gamma 상수 유지
+2. `scale=50`: RLSD HDR task 기준값으로 점프 (0.5~1.0에서 효과 없었음)
+3. 주석에서 "동형"이라는 과장 표현 제거, 정확한 메커니즘 설명
+
+**TODO (로깅 추가 권장)**:
+- `ratio = ||λr|| / ||score||` 로깅하여 repulsion이 실제로 dynamics에 영향 주는지 확인
+- 초반 몇 step에서 ratio가 1e-2~1e-1 수준이면 효과 있음
+
 * 설정: 입자 4개, 처음부터 끝까지($T \to 0$) 유지.
 * 비교: Ours (Repulsion ON) vs. DAPS Baseline (Repulsion OFF, Independent)
 * 확인할 지표:
