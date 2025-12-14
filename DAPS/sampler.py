@@ -258,6 +258,22 @@ class LatentDAPS(DAPS):
         # Repulsion metrics for logging
         repulsion_step_info = []
 
+        # ============================================================
+        # Repulsion Debug Logs (for repulsion.jsonl)
+        # Sampling rule: step<50: every 5 steps, step>=50: every 25 steps
+        # Always include: step in {0,1,2,5,10}
+        # ============================================================
+        self.repulsion_debug_logs = []
+        always_log_steps = {0, 1, 2, 5, 10}
+
+        def should_log_step(step: int) -> bool:
+            if step in always_log_steps:
+                return True
+            if step < 50:
+                return step % 5 == 0
+            else:
+                return step % 25 == 0
+
         zt = z_start
         for step in pbar:
             step_start_time = time.time()
@@ -308,12 +324,45 @@ class LatentDAPS(DAPS):
                 diffusion_scheduler = get_diffusion_scheduler(**self.diffusion_scheduler_config, sigma_max=sigma)
                 pfode = DiffusionPFODE(model, diffusion_scheduler, solver='euler')
 
+                # Set annealing step context for derivative logging
+                pfode.begin_annealing_step(step, sigma_val)
+
                 # Inject repulsion into score if active
                 if repulsion_grad is not None and repulsion_scale > 0:
                     pfode.set_repulsion(repulsion_grad.detach(), scale=repulsion_scale)
 
                 z0hat = pfode.sample(zt)
+
+                # ============================================================
+                # Collect debug info from derivative for repulsion.jsonl
+                # ============================================================
+                if should_log_step(step):
+                    score_info = pfode.get_last_score_info()
+                    debug_log_entry = {
+                        'step': step,
+                        'sigma': sigma_val,
+                        # From derivative (pfode)
+                        'repulsion_on': score_info.get('repulsion_on', False),
+                        'repulsion_scale_used': score_info.get('repulsion_scale_used', 0.0),
+                        'score_base_norm': score_info.get('score_base_norm', 0.0),
+                        'repulsion_norm': score_info.get('repulsion_norm', 0.0),
+                        'scaled_repulsion_norm': score_info.get('scaled_repulsion_norm', 0.0),
+                        'ratio_scaled_to_score': score_info.get('ratio_scaled_to_score', 0.0),
+                        'repulsion_cleared': score_info.get('repulsion_cleared', True),
+                    }
+                    # Add info from repulsion module (DINO distances, weights)
+                    if repulsion_active and step_repulsion_info:
+                        debug_log_entry.update({
+                            'mean_pairwise_dino_dist': step_repulsion_info.get('mean_pairwise_distance', 0.0),
+                            'weights_mean': step_repulsion_info.get('weights_mean', 0.0),
+                            'weights_max': step_repulsion_info.get('weights_max', 0.0),
+                            'weights_nonzero_frac': step_repulsion_info.get('weights_nonzero_frac', 0.0),
+                            'repulsion_time_sec': step_repulsion_info.get('repulsion_time_seconds', 0.0),
+                        })
+                    self.repulsion_debug_logs.append(debug_log_entry)
+
                 pfode.clear_repulsion()  # Clear repulsion state after sampling
+                pfode.end_annealing_step()
                 x0hat = model.decode(z0hat)
 
             # 2. MCMC update (항상 enable_grad - operator.gradient()가 data fitting gradient 계산)

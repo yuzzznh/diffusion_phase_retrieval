@@ -145,9 +145,61 @@ REPULSION_SCHEDULE="constant" # 추가 decay 없음
 2. `scale=50`: RLSD HDR task 기준값으로 점프 (0.5~1.0에서 효과 없었음)
 3. 주석에서 "동형"이라는 과장 표현 제거, 정확한 메커니즘 설명
 
-**TODO (로깅 추가 권장)**:
-- `ratio = ||λr|| / ||score||` 로깅하여 repulsion이 실제로 dynamics에 영향 주는지 확인
-- 초반 몇 step에서 ratio가 1e-2~1e-1 수준이면 효과 있음
+#### 디버깅 로깅 및 Assert 추가 (2025-12-14) → **완료**
+
+**배경**: scale=50으로 올려도 repulsion이 실제로 적용되는지 확신이 없어서, assert와 상세 로깅 추가.
+
+**구현 내용**:
+
+1. **Assert 추가** (`cores/scheduler.py` - `DiffusionPFODE.derivative()`):
+   - ON 상태: `repulsion is not None`, `scale > 0`, `isfinite(score)`, `isfinite(repulsion)`, `shape 일치`
+   - OFF 상태: `scale == 0`
+   - Warning: `ratio > 10`이면 폭주 위험 경고 출력
+
+2. **repulsion.jsonl 로깅** (metrics.json과 별개):
+   - 저장 위치: `results/<run_name>/repulsion.jsonl`
+   - 샘플링 규칙: step<50은 매 5 step, step>=50은 매 25 step, 항상 {0,1,2,5,10} 포함
+   - 필드:
+     ```json
+     {"image_idx": 0, "step": 0, "sigma": 10.0, "repulsion_on": true,
+      "repulsion_scale_used": 50.0, "score_base_norm": 1234.5,
+      "repulsion_norm": 0.123, "scaled_repulsion_norm": 6.15,
+      "ratio_scaled_to_score": 0.005, "repulsion_cleared": false,
+      "mean_pairwise_dino_dist": 32.1, "weights_mean": 0.45,
+      "weights_max": 0.98, "weights_nonzero_frac": 1.0, "repulsion_time_sec": 0.23}
+     ```
+
+3. **수정된 파일**:
+   - `cores/scheduler.py`: assert + `_last_score_info` + `begin/end_annealing_step()`
+   - `repulsion.py`: `weights_mean`, `weights_max`, `weights_nonzero_frac` 추가
+   - `sampler.py`: `repulsion_debug_logs` 수집, 샘플링 규칙 적용
+   - `posterior_sample.py`: `repulsion.jsonl` 저장 로직
+
+#### 결과 디렉토리 정리 (2025-12-14)
+
+이전 scale=0.1 sanity check 결과를 보존하기 위해 디렉토리 이름 변경:
+```
+results/exp1_repulsion/imagenet_1img/exp1_sanity_check → exp1_sanity_check_scale0.1
+results/exp3_2particle/imagenet_1img/exp3_sanity_check → exp3_sanity_check_scale0.1
+```
+
+#### Sanity Check 실행 (2025-12-14) - scale=50
+
+```bash
+# Exp1 (4-particle) sanity check
+bash commands_gpu/exp1_repulsion.sh --1
+# → results/exp1_repulsion/imagenet_1img/exp1_sanity_check (scale=50)
+
+# Exp3 (2-particle) sanity check
+bash commands_gpu/exp3_2particle.sh --1
+# → results/exp3_2particle/imagenet_1img/exp3_sanity_check (scale=50)
+```
+
+**확인할 것**:
+- `repulsion.jsonl`에서 `ratio_scaled_to_score`가 0이 아닌 값인지
+- 초반 step에서 `repulsion_on=true`이고 `repulsion_scale_used=50`인지
+- assert 통과 여부 (에러 없이 완료되면 OK)
+- Exp3 (N=2)에서 bandwidth 버그 수정이 정상 작동하는지 (NaN/crash 없음)
 
 * 설정: 입자 4개, 처음부터 끝까지($T \to 0$) 유지.
 * 비교: Ours (Repulsion ON) vs. DAPS Baseline (Repulsion OFF, Independent)
@@ -306,10 +358,10 @@ ReSample 적용 시점: $T=200$ (Low noise) 시점은 이미 이미지가 거의
 - **높은 std 이미지**: img 7 (3.92), img 9 (2.85) → Phase retrieval의 multi-modal 특성 반영
 - **어려운 이미지**: img 8 (best=10.28) → 일부 이미지에서 성능 저하
 
-### [실험 1] Repulsion Sanity Check (2025-12-13 KST)
+### [실험 1] Repulsion Sanity Check (2025-12-13 KST) - scale=0.1
 
-#### Exp0 vs Exp1 Sanity Check 비교 (1 Image)
-| Metric | Exp0 (Baseline) | Exp1 (Repulsion) | 차이 |
+#### Exp0 vs Exp1 Sanity Check 비교 (1 Image, scale=0.1)
+| Metric | Exp0 (Baseline) | Exp1 (Repulsion, s=0.1) | 차이 |
 |--------|-----------------|------------------|------|
 | PSNR samples | [8.46, 7.83, 8.44, 11.25] | [8.46, 7.82, 8.40, 11.24] | ~동일 |
 | **Best PSNR** | 11.25 | 11.24 | -0.01 |
@@ -320,7 +372,7 @@ ReSample 적용 시점: $T=200$ (Low noise) 시점은 이미 이미지가 거의
 | **Time** | 900초 | 910초 | +10초 (+1.1%) |
 | **Peak VRAM** | 10,117 MB | 10,209 MB | +92 MB (+0.9%) |
 
-#### Exp1 Repulsion 설정
+#### Exp1 Repulsion 설정 (scale=0.1)
 | Parameter | Value |
 |-----------|-------|
 | repulsion_scale | 0.1 |
@@ -340,7 +392,7 @@ ReSample 적용 시점: $T=200$ (Low noise) 시점은 이미 이미지가 거의
 - **Overhead 미미**: 시간 +1.1%, VRAM +0.9% → repulsion 연산 비용 낮음
 - **다음 단계**: `repulsion_scale` 조정 또는 10 image 실험으로 효과 검증 필요
 
-### [실험 1/3] Overnight Scale Grid Search (2025-12-14 KST)
+### [실험 1/3] Overnight Scale Grid Search (2025-12-14 KST) - scale=0.5, 1.0
 
 #### 핵심 요약
 | 실험 | Particles | Scale | Best PSNR | Time | VRAM |

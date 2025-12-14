@@ -298,6 +298,7 @@ def compute_repulsion_gradient(
     repulsion_grad = repulsion_grad / K_sum
 
     # Collect debugging info
+    weights_flat = weights.flatten()
     info = {
         'mean_pairwise_distance': distance.mean().item(),
         'median_pairwise_distance': distance.median().item(),
@@ -305,6 +306,11 @@ def compute_repulsion_gradient(
         'mean_kernel_weight': weights.mean().item(),
         'repulsion_grad_norm': repulsion_grad.norm().item(),
         'num_particles': B,
+        # Additional weight metrics for debugging kernel saturation
+        'weights_mean': weights_flat.mean().item(),
+        'weights_max': weights_flat.max().item(),
+        'weights_min': weights_flat.min().item(),
+        'weights_nonzero_frac': (weights_flat > 1e-6).float().mean().item(),
     }
 
     return repulsion_grad, info

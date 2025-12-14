@@ -279,6 +279,18 @@ def main(args):
                 print(f'  [Repulsion] active_steps={rep_info.get("repulsion_active_steps", 0)}, '
                       f'total_time={rep_info.get("repulsion_total_time_seconds", 0):.2f}s')
 
+        # ============================================================
+        # repulsion.jsonl: sampler의 repulsion_debug_logs 저장
+        # (metrics.json과 별개로 디버깅용 상세 로그)
+        # ============================================================
+        if hasattr(sampler, 'repulsion_debug_logs') and sampler.repulsion_debug_logs:
+            repulsion_jsonl_path = root / 'repulsion.jsonl'
+            with open(str(repulsion_jsonl_path), 'a') as f:
+                for log_entry in sampler.repulsion_debug_logs:
+                    # Add image_idx to each entry for multi-image runs
+                    log_entry_with_img = {'image_idx': img_idx, **log_entry}
+                    f.write(json.dumps(log_entry_with_img) + '\n')
+
         # Log per-image metrics
         main_metric = evaluator.main_eval_fn_name
         print(f'  Image {img_idx}: {main_metric} best={per_image_result[main_metric]["best"]:.3f}, '

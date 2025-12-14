@@ -383,6 +383,13 @@ class DiffusionPFODE:
         self._repulsion = None
         self._repulsion_scale = 0.0
 
+        # Debug info from last derivative() call (for logging in sampler)
+        self._last_score_info = {}
+
+        # Annealing step context (optional, set by sampler)
+        self._current_annealing_step = -1
+        self._current_sigma = -1.0
+
     def set_repulsion(self, repulsion: 'torch.Tensor', scale: float = 1.0):
         """
         Set repulsion gradient for score-level injection.
@@ -406,6 +413,21 @@ class DiffusionPFODE:
         self._repulsion = None
         self._repulsion_scale = 0.0
 
+    def begin_annealing_step(self, step: int, sigma: float):
+        """Set annealing step context for derivative logging."""
+        self._current_annealing_step = step
+        self._current_sigma = sigma
+        self._last_score_info = {}  # Reset for new step
+
+    def end_annealing_step(self):
+        """End annealing step context."""
+        # Keep _last_score_info for sampler to read
+        pass
+
+    def get_last_score_info(self) -> dict:
+        """Get debug info from last derivative() call."""
+        return self._last_score_info.copy()
+
     def derivative(self, xt, t):
         """
         Compute ODE drift for reverse diffusion.
@@ -426,6 +448,8 @@ class DiffusionPFODE:
         Returns:
             Derivative dx/dt for ODE solver
         """
+        import torch  # Ensure torch is available for isfinite
+
         # refer to Eq. (4) in EDM paper (https://arxiv.org/abs/2206.00364)
         st = self.scheduler.get_scaling(t)
         dst = self.scheduler.get_scaling_derivative(t)
@@ -433,13 +457,73 @@ class DiffusionPFODE:
         dsigma_t = self.scheduler.get_sigma_derivative(t)
 
         # Compute base score from denoiser
-        score = self.model.score(xt/st, sigma=sigma_t)
+        score_base = self.model.score(xt/st, sigma=sigma_t)
 
-        # Score-level repulsion injection (Exp 1/3)
-        # score' = score + scale * repulsion
-        # This pushes particles apart in latent space while respecting the prior gradient
-        if self._repulsion is not None and self._repulsion_scale > 0:
-            score = score + self._repulsion_scale * self._repulsion
+        # ============================================================
+        # Assert & Debug Info for Repulsion (Exp 1/3)
+        # ============================================================
+        repulsion_on = (self._repulsion is not None) and (self._repulsion_scale > 0)
+
+        # Compute norms for logging (always, for both ON and OFF cases)
+        score_base_norm = score_base.norm().item()
+
+        if repulsion_on:
+            # ===== ON state assertions =====
+            assert self._repulsion is not None, \
+                "[Repulsion Assert] repulsion_on=True but _repulsion is None"
+            assert self._repulsion_scale > 0, \
+                f"[Repulsion Assert] repulsion_on=True but scale={self._repulsion_scale}"
+            assert torch.isfinite(score_base).all(), \
+                "[Repulsion Assert] score_base contains NaN or Inf"
+            assert torch.isfinite(self._repulsion).all(), \
+                "[Repulsion Assert] repulsion contains NaN or Inf"
+            assert self._repulsion.shape == score_base.shape, \
+                f"[Repulsion Assert] Shape mismatch: repulsion {self._repulsion.shape} vs score {score_base.shape}"
+
+            # Compute scaled repulsion
+            scaled_repulsion = self._repulsion_scale * self._repulsion
+            repulsion_norm = self._repulsion.norm().item()
+            scaled_repulsion_norm = scaled_repulsion.norm().item()
+            ratio_scaled_to_score = scaled_repulsion_norm / (score_base_norm + 1e-12)
+
+            # Warning for potential blowup (ratio > 10)
+            if ratio_scaled_to_score > 10:
+                print(f"[Repulsion Warning] High ratio={ratio_scaled_to_score:.2f} at step={self._current_annealing_step}, "
+                      f"sigma={self._current_sigma:.4f}. Potential blowup risk.")
+
+            # Apply repulsion to score
+            score = score_base + scaled_repulsion
+
+            # Store debug info
+            self._last_score_info = {
+                'repulsion_on': True,
+                'repulsion_scale_used': self._repulsion_scale,
+                'score_base_norm': score_base_norm,
+                'repulsion_norm': repulsion_norm,
+                'scaled_repulsion_norm': scaled_repulsion_norm,
+                'ratio_scaled_to_score': ratio_scaled_to_score,
+                'repulsion_cleared': False,
+            }
+        else:
+            # ===== OFF state assertions =====
+            # When OFF, scale should be 0 (repulsion tensor may or may not be None)
+            if self._repulsion is not None:
+                # If tensor exists but scale is 0, that's OK (just not applied)
+                assert self._repulsion_scale == 0, \
+                    f"[Repulsion Assert] repulsion_off but scale={self._repulsion_scale} > 0"
+
+            score = score_base
+
+            # Store debug info
+            self._last_score_info = {
+                'repulsion_on': False,
+                'repulsion_scale_used': self._repulsion_scale,
+                'score_base_norm': score_base_norm,
+                'repulsion_norm': 0.0,
+                'scaled_repulsion_norm': 0.0,
+                'ratio_scaled_to_score': 0.0,
+                'repulsion_cleared': (self._repulsion is None),
+            }
 
         return dst / st * xt - st * dsigma_t * sigma_t * score
 
