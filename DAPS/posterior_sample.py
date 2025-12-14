@@ -135,8 +135,16 @@ def sample_per_image(sampler, model, operator, evaluator, image, measurement, nu
 
     # Sample
     record = args.save_traj
+    # Pass optimization hyperparameters if optimization is enabled
+    opt_kwargs = {}
+    if hasattr(args, 'hard_data_consistency') and args.hard_data_consistency == 1:
+        opt_kwargs = {
+            'optimization_lr': getattr(args, 'optimization_lr', 5e-3),
+            'optimization_eps': getattr(args, 'optimization_eps', 1e-3),
+            'optimization_max_iters': getattr(args, 'optimization_max_iters', 500),
+        }
     samples = sampler.sample(model, x_start, operator, y_batch, evaluator,
-                            verbose=True, record=record, gt=image_batch)
+                            verbose=True, record=record, gt=image_batch, **opt_kwargs)
 
     trajs = None
     if record:
@@ -217,7 +225,7 @@ def main(args):
         repulsion_schedule=args.repulsion_schedule,
         repulsion_dino_model=args.repulsion_dino_model,
         pruning_step=args.pruning_step,
-        optimization_step=args.optimization_step,
+        hard_data_consistency=args.hard_data_consistency,
         use_tpu=args.use_tpu
     )
 
@@ -336,6 +344,18 @@ def main(args):
                     log_entry_with_img = {'image_idx': img_idx, **log_entry}
                     f.write(json.dumps(log_entry_with_img) + '\n')
 
+        # ============================================================
+        # optimization.jsonl: sampler의 optimization_debug_logs 저장 (Exp 4)
+        # (metrics.json 포맷 불변, 새 파일로 분리)
+        # ============================================================
+        if hasattr(sampler, 'optimization_debug_logs') and sampler.optimization_debug_logs:
+            optimization_jsonl_path = root / 'optimization.jsonl'
+            with open(str(optimization_jsonl_path), 'a') as f:
+                for log_entry in sampler.optimization_debug_logs:
+                    # Add image_idx to each entry for multi-image runs
+                    log_entry_with_img = {'image_idx': img_idx, **log_entry}
+                    f.write(json.dumps(log_entry_with_img) + '\n')
+
         # Log per-image metrics
         main_metric = evaluator.main_eval_fn_name
         print(f'  Image {img_idx}: {main_metric} best={per_image_result[main_metric]["best"]:.3f}, '
@@ -396,7 +416,12 @@ def main(args):
             if k != 'step_details'  # step_details는 너무 길어서 제외
         }
 
-    # VRAM summary (segments 기반 - Exp2 pruning, 향후 Exp4 optimization 확장 용이)
+    # Optimization summary (Exp 4)
+    optimization_summary = {}
+    if hasattr(sampler, 'optimization_info') and sampler.optimization_info.get('optimization_enabled', True):
+        optimization_summary = sampler.optimization_info.copy()
+
+    # VRAM summary (segments 기반 - Exp2 pruning, Exp4 optimization)
     # 구조: {"peak_memory_mb": 10209.0, "segments": {"pre_pruning": 10150.0, "post_pruning": 6100.0}}
     vram_summary = {
         'peak_memory_mb': peak_memory_mb,
@@ -416,9 +441,13 @@ def main(args):
             'repulsion_schedule': args.repulsion_schedule,
             'repulsion_dino_model': args.repulsion_dino_model,
             'pruning_step': args.pruning_step,
-            'optimization_step': args.optimization_step,
+            'hard_data_consistency': args.hard_data_consistency,
+            'optimization_lr': getattr(args, 'optimization_lr', 5e-3),
+            'optimization_eps': getattr(args, 'optimization_eps', 1e-3),
+            'optimization_max_iters': getattr(args, 'optimization_max_iters', 500),
         },
         'repulsion': repulsion_summary,
+        'optimization': optimization_summary,
         'timing': timing_summary,
         'vram': vram_summary,
         'device': {

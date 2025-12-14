@@ -43,7 +43,7 @@ REPULSION_SCALE=10            # 튜닝 중: 10 → ratio 보고 5 또는 15로 �
 REPULSION_SIGMA_BREAK=1.0     # σ < 1.0에서 OFF
 REPULSION_SCHEDULE="constant" # 추가 decay 없음
 PRUNING_STEP=25               # 4→2 pruning at step 25
-OPTIMIZATION_STEP=25          # latent optimization from step 25
+HARD_DATA_CONSISTENCY=1       # 1이면 on (맨 마지막에 latent optimization 수행), -1이면 off
 
 # ============================================================
 # [실험 5] ImageNet 90 images - Best Setting (10~99, 앞 10개는 다른 실험에서 사용)
@@ -64,10 +64,10 @@ if [ "$RUN_IMAGENET" = true ]; then
     repulsion_sigma_break=${REPULSION_SIGMA_BREAK} \
     repulsion_schedule=${REPULSION_SCHEDULE} \
     pruning_step=${PRUNING_STEP} \
-    optimization_step=${OPTIMIZATION_STEP} \
+    hard_data_consistency=${HARD_DATA_CONSISTENCY} \
     data.start_id=10 \
     data.end_id=100 \
-    name=exp5_imagenet_90img_scale${REPULSION_SCALE}_prune${PRUNING_STEP}_opt${OPTIMIZATION_STEP} \
+    name=exp5_imagenet_90img_scale${REPULSION_SCALE}_prune${PRUNING_STEP}_hdc${HARD_DATA_CONSISTENCY} \
     gpu=0
 fi
 
@@ -91,9 +91,9 @@ if [ "$RUN_FFHQ" = true ]; then
     repulsion_sigma_break=${REPULSION_SIGMA_BREAK} \
     repulsion_schedule=${REPULSION_SCHEDULE} \
     pruning_step=${PRUNING_STEP} \
-    optimization_step=${OPTIMIZATION_STEP} \
+    hard_data_consistency=${HARD_DATA_CONSISTENCY} \
     data.end_id=100 \
-    name=exp5_ffhq_100img_scale${REPULSION_SCALE}_prune${PRUNING_STEP}_opt${OPTIMIZATION_STEP} \
+    name=exp5_ffhq_100img_scale${REPULSION_SCALE}_prune${PRUNING_STEP}_hdc${HARD_DATA_CONSISTENCY} \
     gpu=0
 fi
 

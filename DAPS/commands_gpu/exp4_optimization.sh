@@ -1,11 +1,17 @@
 #!/bin/bash
 # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # [실험 4] Hard Data Consistency Optimization (ReSample-style)
-# 목표: 실험 1~3 중 가장 잘 나온 세팅에 latent optimization 추가
-# 확인 지표: PSNR 향상, Optimization 횟수/소요시간
+# 목표: 실험 1~3 중 가장 잘 나온 세팅(실험 1, scale=10)에 latent optimization 추가
+# 확인 지표: PSNR 향상, Optimization 횟수/소요시간, 각 batch element의 independent termination
+#
+# 구현 요약:
+# - 맨 마지막 timestep에서만 optimization 수행 (diffusion loop 완료 후)
+# - Loss: || A(decode(z)) - y ||^2 (measurement MSE)
+# - Termination: (1) cur_loss < eps² (1e-6), (2) 200 iter 후 init_loss < cur_loss
+# - **Batch element 간 optimization & termination이 independent** (ReSample 공식 레포와 다름!)
 #
 # 사용법: bash exp4_optimization.sh [--1] [--10] [--90]
-#   --1   : 1 image sanity check (이미지 0, optimization_step 튜닝용)
+#   --1   : 1 image sanity check (이미지 0)
 #   --10  : 10 images main experiment (이미지 0~9)
 #   --90  : 90 images final eval (이미지 10~99, --10과 합쳐서 100개)
 # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -34,24 +40,23 @@ if [ "$RUN_1" = false ] && [ "$RUN_10" = false ] && [ "$RUN_90" = false ]; then
     exit 0
 fi
 
-# TODO exp 1/2/3에서 결정된 Hyperparameter 값을 가져와서 반영할 것!
-
 # ============================================================
-# Repulsion Hyperparameters (Exp1과 동일)
-# - scale: 튜닝 중 (scale=50은 너무 강함, scale=0.1~1.0은 효과 없음)
-#   → scale=10부터 시작, ratio_scaled_to_score 0.1~0.3 목표
-# - sigma_break=1.0: σ ∈ [1,10] 구간만 ON (~30/50 step)
-# - schedule=constant: 추가 decay 없음
+# Hyperparameters: 실험 1 세팅 (scale=10, Sweet Spot) + Optimization
+# - Repulsion: scale=10, sigma_break=1.0 (σ < 1.0에서 OFF), schedule=constant
+# - Pruning: 비활성화 (-1) - 실험 4는 optimization 효과 검증이 목적
+# - Optimization: lr=5e-3, eps=1e-3, max_iters=500 (ReSample defaults)
 # ============================================================
-REPULSION_SCALE=10            # 튜닝 중: 10 → ratio 보고 5 또는 15로 조정
-REPULSION_SIGMA_BREAK=1.0     # σ < 1.0에서 OFF
-REPULSION_SCHEDULE="constant" # 추가 decay 없음
-PRUNING_STEP=25               # 4→2 pruning at step 25
-OPTIMIZATION_STEP=25          # latent optimization from step 25
+REPULSION_SCALE=10
+REPULSION_SIGMA_BREAK=1.0
+REPULSION_SCHEDULE="constant"
+PRUNING_STEP=-1               # 비활성화 (실험 4에서는 pruning 사용 안 함)
+HARD_DATA_CONSISTENCY=1       # 1이면 on (맨 마지막에 latent optimization 수행), -1이면 off
+OPTIMIZATION_LR=5e-3          # ReSample default
+OPTIMIZATION_EPS=1e-3         # cur_loss < eps² → terminate
+OPTIMIZATION_MAX_ITERS=500    # ReSample default
 
 # ============================================================
 # [실험 4] Sanity Check - 1 image
-# TODO: optimization_step 튜닝 후 값 변경
 # ============================================================
 if [ "$RUN_1" = true ]; then
     echo "========== [실험 4] 1 image sanity check =========="
@@ -69,9 +74,12 @@ if [ "$RUN_1" = true ]; then
     repulsion_sigma_break=${REPULSION_SIGMA_BREAK} \
     repulsion_schedule=${REPULSION_SCHEDULE} \
     pruning_step=${PRUNING_STEP} \
-    optimization_step=${OPTIMIZATION_STEP} \
+    hard_data_consistency=${HARD_DATA_CONSISTENCY} \
+    optimization_lr=${OPTIMIZATION_LR} \
+    optimization_eps=${OPTIMIZATION_EPS} \
+    optimization_max_iters=${OPTIMIZATION_MAX_ITERS} \
     data.end_id=1 \
-    name=exp4_sanity_check_scale${REPULSION_SCALE}_prune${PRUNING_STEP}_opt${OPTIMIZATION_STEP} \
+    name=exp4_sanity_check \
     gpu=0
 fi
 
@@ -94,9 +102,12 @@ if [ "$RUN_10" = true ]; then
     repulsion_sigma_break=${REPULSION_SIGMA_BREAK} \
     repulsion_schedule=${REPULSION_SCHEDULE} \
     pruning_step=${PRUNING_STEP} \
-    optimization_step=${OPTIMIZATION_STEP} \
+    hard_data_consistency=${HARD_DATA_CONSISTENCY} \
+    optimization_lr=${OPTIMIZATION_LR} \
+    optimization_eps=${OPTIMIZATION_EPS} \
+    optimization_max_iters=${OPTIMIZATION_MAX_ITERS} \
     data.end_id=10 \
-    name=exp4_10img_scale${REPULSION_SCALE}_prune${PRUNING_STEP}_opt${OPTIMIZATION_STEP} \
+    name=exp4_10img \
     gpu=0
 fi
 
@@ -119,10 +130,13 @@ if [ "$RUN_90" = true ]; then
     repulsion_sigma_break=${REPULSION_SIGMA_BREAK} \
     repulsion_schedule=${REPULSION_SCHEDULE} \
     pruning_step=${PRUNING_STEP} \
-    optimization_step=${OPTIMIZATION_STEP} \
+    hard_data_consistency=${HARD_DATA_CONSISTENCY} \
+    optimization_lr=${OPTIMIZATION_LR} \
+    optimization_eps=${OPTIMIZATION_EPS} \
+    optimization_max_iters=${OPTIMIZATION_MAX_ITERS} \
     data.start_id=10 \
     data.end_id=100 \
-    name=exp4_90img_scale${REPULSION_SCALE}_prune${PRUNING_STEP}_opt${OPTIMIZATION_STEP} \
+    name=exp4_90img \
     gpu=0
 fi
 

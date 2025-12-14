@@ -28,7 +28,7 @@ class DAPS(nn.Module):
     """
 
     def __init__(self, annealing_scheduler_config, diffusion_scheduler_config, mcmc_sampler_config,
-                 repulsion_scale=0.0, pruning_step=-1, optimization_step=-1, use_tpu=False):
+                 repulsion_scale=0.0, pruning_step=-1, hard_data_consistency=-1, use_tpu=False):
         """
         Initializes the DAPS sampler with the provided scheduler and sampler configurations.
 
@@ -38,7 +38,7 @@ class DAPS(nn.Module):
             mcmc_sampler_config (dict): Configuration for MCMC sampler.
             repulsion_scale (float): Initial strength of particle repulsion. 0.0 = independent (DAPS baseline).
             pruning_step (int): Timestep to perform pruning. -1 = no pruning.
-            optimization_step (int): Timestep to start latent optimization. -1 = no optimization.
+            hard_data_consistency (int): Timestep to start latent optimization. -1 = no optimization.
             use_tpu (bool): True면 TPU 사용 (mark_step 호출), False면 CUDA 사용.
         """
         super().__init__()
@@ -51,13 +51,13 @@ class DAPS(nn.Module):
         # 실험 1~5용 Flag
         self.repulsion_scale = repulsion_scale
         self.pruning_step = pruning_step
-        self.optimization_step = optimization_step
+        self.hard_data_consistency = hard_data_consistency
 
         # TPU/CUDA Flag
         self.use_tpu = use_tpu
 
         # Gradient 필요 여부 (실험 0에서는 False)
-        self.needs_grad = (repulsion_scale > 0) or (optimization_step >= 0)
+        self.needs_grad = (repulsion_scale > 0) or (hard_data_consistency == 1)
 
     def sample(self, model, x_start, operator, measurement, evaluator=None, record=False, verbose=False, **kwargs):
         """
@@ -172,7 +172,7 @@ class LatentDAPS(DAPS):
     def __init__(self, annealing_scheduler_config, diffusion_scheduler_config, mcmc_sampler_config,
                  repulsion_scale=0.0, repulsion_sigma_break=20.0, repulsion_schedule='linear',
                  repulsion_dino_model='dino_vits16',
-                 pruning_step=-1, optimization_step=-1, use_tpu=False):
+                 pruning_step=-1, hard_data_consistency=-1, use_tpu=False):
         """
         Initialize LatentDAPS with repulsion support.
 
@@ -185,7 +185,7 @@ class LatentDAPS(DAPS):
             repulsion_schedule: Decay schedule ('linear', 'cosine', 'constant')
             repulsion_dino_model: DINO model variant for feature extraction
             pruning_step: Timestep for pruning (-1 = disabled)
-            optimization_step: Timestep to start optimization (-1 = disabled)
+            hard_data_consistency: Timestep to start optimization (-1 = disabled)
             use_tpu: Whether to use TPU
         """
         super().__init__(
@@ -194,7 +194,7 @@ class LatentDAPS(DAPS):
             mcmc_sampler_config=mcmc_sampler_config,
             repulsion_scale=repulsion_scale,
             pruning_step=pruning_step,
-            optimization_step=optimization_step,
+            hard_data_consistency=hard_data_consistency,
             use_tpu=use_tpu,
         )
 
@@ -215,6 +215,193 @@ class LatentDAPS(DAPS):
 
         # Pruning debug logs (for pruning.jsonl)
         self.pruning_debug_logs: List[Dict] = []
+
+        # Optimization debug logs (for optimization.jsonl)
+        self.optimization_debug_logs: List[Dict] = []
+
+    def _latent_optimization(
+        self,
+        z: torch.Tensor,
+        measurement: torch.Tensor,
+        operator: 'LatentWrapper',
+        model: nn.Module,
+        lr: float = 5e-3,
+        eps: float = 1e-3,
+        max_iters: int = 500,
+        verbose: bool = False,
+    ) -> Tuple[torch.Tensor, Dict]:
+        """
+        ReSample-style latent space optimization with batch-independent termination.
+
+        Computes argmin_z ||y - A(D(z))||^2 where D is the decoder.
+
+        Key difference from ReSample: Each batch element has independent termination.
+        This ensures each sample is optimized independently without being affected
+        by other samples in the batch.
+
+        Termination criteria (per-element):
+        1. Loss threshold: cur_loss < eps² (1e-6 for eps=1e-3)
+        2. Loss plateau: After 200 iterations, if init_loss < cur_loss, stop
+
+        Args:
+            z: Latent tensor [B, C, H, W]
+            measurement: Measurement tensor [B, ...]
+            operator: LatentWrapper containing forward operator
+            model: Latent diffusion model with decode()
+            lr: Learning rate (default: 5e-3)
+            eps: Tolerance (default: 1e-3, squared = 1e-6)
+            max_iters: Maximum iterations (default: 500)
+            verbose: Print progress
+
+        Returns:
+            Tuple of (optimized_z, info_dict)
+        """
+        batch_size = z.shape[0]
+        device = z.device
+
+        # Store original z for accept-if-improve logic
+        z_original = z.detach().clone()
+
+        # Clone z and enable gradient
+        z_opt = z.detach().clone().requires_grad_(True)
+
+        # Initialize optimizer
+        optimizer = torch.optim.AdamW([z_opt], lr=lr)
+
+        # Per-element tracking
+        init_losses = torch.zeros(batch_size, device=device)
+        final_losses = torch.zeros(batch_size, device=device)
+        final_iters = torch.zeros(batch_size, dtype=torch.long, device=device)
+        terminated = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        termination_reasons = ['max_iters'] * batch_size  # Default reason
+
+        # Loss history for plateau detection (last 200 iterations per element)
+        # We only need init_loss for plateau check
+
+        opt_start_time = time.time()
+
+        for itr in range(max_iters):
+            # Skip if all terminated
+            if terminated.all():
+                break
+
+            optimizer.zero_grad()
+
+            # Decode latent to image space
+            x_decoded = model.decode(z_opt)
+
+            # Forward through operator: A(D(z))
+            y_pred = operator.operator.forward(x_decoded)
+
+            # Compute per-element MSE loss
+            # Reshape to [B, -1] and compute mean over non-batch dims
+            y_pred_flat = y_pred.view(batch_size, -1)
+            measurement_flat = measurement.view(batch_size, -1)
+            per_element_loss = ((y_pred_flat - measurement_flat) ** 2).mean(dim=1)  # [B]
+
+            # Store initial losses
+            if itr == 0:
+                init_losses = per_element_loss.detach().clone()
+
+            # Compute total loss for backward (only for non-terminated elements)
+            active_mask = ~terminated
+            if active_mask.any():
+                # Weighted mean: only compute gradient for active elements
+                total_loss = (per_element_loss * active_mask.float()).sum() / active_mask.float().sum()
+                total_loss.backward()
+
+                # Zero out gradients for terminated elements
+                if z_opt.grad is not None:
+                    z_opt.grad.data[terminated] = 0
+
+                optimizer.step()
+
+            # Check termination criteria per element
+            cur_losses = per_element_loss.detach()
+
+            # Criterion 1: Loss threshold (cur_loss < eps²)
+            loss_threshold_met = cur_losses < (eps ** 2)
+            newly_terminated_threshold = loss_threshold_met & ~terminated
+            if newly_terminated_threshold.any():
+                for idx in newly_terminated_threshold.nonzero(as_tuple=True)[0]:
+                    termination_reasons[idx.item()] = 'loss_threshold'
+                    final_iters[idx] = itr
+                    final_losses[idx] = cur_losses[idx]
+                terminated = terminated | newly_terminated_threshold
+
+            # Criterion 2: Loss plateau (after 200 iters, if init_loss < cur_loss)
+            if itr >= 200:
+                plateau_met = (init_losses < cur_losses) & ~terminated
+                if plateau_met.any():
+                    for idx in plateau_met.nonzero(as_tuple=True)[0]:
+                        termination_reasons[idx.item()] = 'loss_plateau'
+                        final_iters[idx] = itr
+                        final_losses[idx] = cur_losses[idx]
+                    terminated = terminated | plateau_met
+
+            # Progress logging
+            if verbose and itr % 50 == 0:
+                active_count = (~terminated).sum().item()
+                mean_loss = cur_losses[~terminated].mean().item() if active_count > 0 else 0
+                print(f"[Optimization] iter={itr}, active={active_count}/{batch_size}, "
+                      f"mean_loss={mean_loss:.6f}")
+
+        # Set final values for any remaining active elements
+        with torch.no_grad():
+            x_decoded = model.decode(z_opt)
+            y_pred = operator.operator.forward(x_decoded)
+            y_pred_flat = y_pred.view(batch_size, -1)
+            measurement_flat = measurement.view(batch_size, -1)
+            final_cur_losses = ((y_pred_flat - measurement_flat) ** 2).mean(dim=1)
+
+        still_active = ~terminated
+        final_losses[still_active] = final_cur_losses[still_active]
+        final_iters[still_active] = max_iters
+
+        opt_end_time = time.time()
+
+        # ============================================================
+        # Accept-if-improve: element별로 최적화 후 loss가 더 낮은 경우에만 채택
+        # final_loss < init_loss → 최적화된 z 사용
+        # final_loss >= init_loss → 원래 z 유지 (최적화가 오히려 악화시킴)
+        # ============================================================
+        accept_mask = final_losses < init_losses  # [B] bool tensor
+
+        # Build final z: element-wise selection
+        z_final = z_opt.detach().clone()
+        reject_mask = ~accept_mask
+        if reject_mask.any():
+            # Replace rejected elements with original z
+            z_final[reject_mask] = z_original[reject_mask]
+
+        # Track accept/reject counts
+        num_accepted = accept_mask.sum().item()
+        num_rejected = reject_mask.sum().item()
+
+        # Build info dict
+        info = {
+            'init_losses': init_losses.cpu().tolist(),
+            'final_losses': final_losses.cpu().tolist(),
+            'final_iters': final_iters.cpu().tolist(),
+            'termination_reasons': termination_reasons,
+            'total_time_seconds': opt_end_time - opt_start_time,
+            'lr': lr,
+            'eps': eps,
+            'max_iters': max_iters,
+            'batch_size': batch_size,
+            # Accept-if-improve info
+            'accepted_mask': accept_mask.cpu().tolist(),
+            'num_accepted': num_accepted,
+            'num_rejected': num_rejected,
+        }
+
+        if verbose:
+            print(f"[Optimization] Done. Time={info['total_time_seconds']:.2f}s, "
+                  f"Mean final_loss={np.mean(info['final_losses']):.6f}, "
+                  f"Mean iters={np.mean(info['final_iters']):.1f}, "
+                  f"Accepted={num_accepted}/{batch_size}")
+
+        return z_final, info
 
     def sample(self, model, z_start, operator, measurement, evaluator=None, record=False, verbose=False, **kwargs):
         """
@@ -285,7 +472,8 @@ class LatentDAPS(DAPS):
         did_prune = False
         prev_sigma = None
         self.pruning_debug_logs = []  # Reset for each image
-        self.vram_segments = {}  # segments 기반 VRAM 측정 (예: {'pre_pruning': 10150.0, 'post_pruning': 6100.0})
+        self.optimization_debug_logs = []  # Reset for each image (Exp 4)
+        self.vram_segments = {}  # segments 기반 VRAM 측정 (예: {'pre_pruning': 10150.0, 'post_pruning': 6100.0, 'optimization': 5800.0})
 
         def should_log_step(step: int) -> bool:
             if step in always_log_steps:
@@ -304,13 +492,12 @@ class LatentDAPS(DAPS):
             # ============================================================
             # Gradient Toggle: 실험 1~5에서 필요한 gradient 계산 제어
             # ============================================================
-            # Repulsion: optimization_step 이전까지만 적용 (초반 탐색)
-            do_repulsion = (self.repulsion_scale > 0) and (self.optimization_step < 0 or step < self.optimization_step)
+            # Repulsion: repulsion_scale > 0이면 적용 (hard_data_consistency와 무관)
+            do_repulsion = (self.repulsion_scale > 0)
             # Check if repulsion is active at this sigma level
             repulsion_active = do_repulsion and self._repulsion_module is not None and \
                                self._repulsion_module.is_active(sigma_val, sigma_max)
-            # Optimization: optimization_step 이후부터 적용 (후반 정밀화)
-            do_optimization = (self.optimization_step >= 0) and (step >= self.optimization_step)
+            # Note: hard_data_consistency optimization은 loop 종료 후 맨 마지막에 수행됨
 
             # ============================================================
             # [실험 1/3] Compute Repulsion Gradient
@@ -571,6 +758,63 @@ class LatentDAPS(DAPS):
                 self.vram_segments['post_pruning'] = torch.cuda.max_memory_allocated() / (1024 * 1024)
             if verbose and self.vram_segments:
                 print(f"[VRAM] segments: {self.vram_segments}")
+
+        # ============================================================
+        # [실험 4] Hard Data Consistency Optimization (ReSample-style)
+        # 맨 마지막 timestep에서만 latent space optimization 수행
+        # - Loss: || A(decode(z)) - y ||^2
+        # - Termination: (1) cur_loss < eps², (2) 200 iter 후 init_loss < cur_loss
+        # - Batch element 간 independent termination
+        # ============================================================
+        if self.hard_data_consistency == 1:
+            if verbose:
+                print(f"[Optimization] Starting ReSample-style latent optimization...")
+
+            # VRAM 측정: Optimization 전 peak 기록 후 reset
+            if torch.cuda.is_available() and not self.use_tpu:
+                # Note: pruning이 있었으면 post_pruning이 이미 기록됨
+                # optimization 구간을 별도로 측정
+                torch.cuda.reset_peak_memory_stats()
+
+            # Get optimization hyperparameters from kwargs or use defaults
+            opt_lr = kwargs.get('optimization_lr', 5e-3)
+            opt_eps = kwargs.get('optimization_eps', 1e-3)
+            opt_max_iters = kwargs.get('optimization_max_iters', 500)
+
+            # Perform optimization on the final latent
+            # At the last step: zt = z0y (no noise added), so zt is already the final latent
+            z_final = zt.detach().clone()
+
+            z_optimized, opt_info = self._latent_optimization(
+                z=z_final,
+                measurement=measurement,
+                operator=warpped_operator,
+                model=model,
+                lr=opt_lr,
+                eps=opt_eps,
+                max_iters=opt_max_iters,
+                verbose=verbose,
+            )
+
+            # Decode optimized latent back to image space
+            with torch.no_grad():
+                xt = model.decode(z_optimized)
+
+            # Store optimization info for logging
+            self.optimization_debug_logs.append(opt_info)
+            self.optimization_info = opt_info
+
+            # VRAM 측정: Optimization 후 peak 기록
+            if torch.cuda.is_available() and not self.use_tpu:
+                self.vram_segments['optimization'] = torch.cuda.max_memory_allocated() / (1024 * 1024)
+
+            if verbose:
+                print(f"[Optimization] Complete. Mean iters={np.mean(opt_info['final_iters']):.1f}, "
+                      f"Time={opt_info['total_time_seconds']:.2f}s")
+                if self.vram_segments:
+                    print(f"[VRAM] segments: {self.vram_segments}")
+        else:
+            self.optimization_info = {'optimization_enabled': False}
 
         return xt
 

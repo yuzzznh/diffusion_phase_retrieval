@@ -282,17 +282,86 @@ results/<run_name>/
 * 전략: 여기서 실패 사례(0도/180도 모두 못 찾고 Local Minima 빠짐)가 단 하나라도 나오면 님의 논리는 완벽해집니다.
 * 사실 여기선 앞선 실험들에서 추가되는 hyperparameter가 없으며, sample들 중 실패하는 것들의 비율을 제대로 재는 것이 관건이므로 1 image 실험이 의미가 없다. 최소한 10 image, 여건이 되면 100 image 실험을 돌리자.
 
-### [실험 4] 실험 1~3 중 가장 잘 나온 세팅에 대해 ReSample의 hard data consistency in latent space optimization을 돌리자
-- 정확한 횟수 및 기준은 ReSample 공식 레포의 구현에서 실제 몇 번의 optimization이 이루어지는지를 참고해서 결정하자. hyperparameter 튜닝에 1 image 실험을 활용하자.
+### [실험 4] 실험 1~3 중 가장 잘 나온 세팅(= 12/14 8:30PM 기준 실험 1)에 대해 ReSample의 hard data consistency in latent space optimization을 추가하자 → **구현 완료**
+- 횟수: 맨 마지막 timestep에서만 optimization을 진행.
+- loss: 지금 pruning에서 쓰는 것과 동일한 measurement MSE: || A(decode(z)) - y ||^2
+- 얼마나 강하게?: ReSample 논문 구현의 termination 2가지 기준 그대로 사용
+- 나머지: ReSample 논문 구현 그대로 AdamW, LR = 5e-3, eps = 1e-3, max_iters = 500
+- ~~안전장치: accept-if-improve (measurement 기준) - (최적화 전 loss > 최적화 후 loss)일 때만 업데이트 채택, 아니면 원래 z 유지~~ → **구현 완료**: element별 `final_loss < init_loss`인 경우에만 최적화된 z 채택
 - optimization 횟수 및 소요시간을 보고하자. batch element 간 optimization 및 termination이 independent해야 함에 유의하자 (ReSample 공식 레포는 그렇지 않았음!)
-📊 GPU VRAM 측정 구간 분리 (구현 예정 - segments 기반):
+- ~~GPU VRAM 측정 구간 분리 (구현 예정 - segments 기반):~~
 * ~~Optimization 추가 시, VRAM 측정을 **optimization 전/후 두 구간**으로 분리해야 함.~~
 * ~~`torch.cuda.reset_peak_memory_stats()`를 optimization 시작 시점에 호출하여 각 구간별 peak를 독립 측정.~~
 * ~~metrics.json에 `vram.pre_optimization_peak_mb`, `vram.optimization_peak_mb` 형태로 기록.~~
 * ~~만약 실험 2의 pruning과 함께 사용 시, 3구간으로 분리: `pre_pruning`, `post_pruning_pre_optimization`, `optimization`.~~
-→ **설계 완료** (구현은 Exp4 진행 시): Exp2에서 도입한 `vram.segments` 기반 구조 활용
+→ **구현 완료**: `vram.segments['optimization']`에 optimization 구간 peak VRAM 기록
+
+#### 구현 완료 사항 (2025-12-14)
+
+**1. `_latent_optimization()` 메서드 구현** (`sampler.py`):
+- ReSample-style latent space optimization with **batch-independent termination**
+- Loss: `|| A(decode(z)) - y ||^2` (measurement MSE)
+- Termination criteria (per-element):
+  1. Loss threshold: `cur_loss < eps²` (1e-6 for eps=1e-3)
+  2. Loss plateau: After 200 iterations, if `init_loss < cur_loss`, stop
+- **Accept-if-improve 로직** (안전장치):
+  - element별로 `final_loss < init_loss`인 경우에만 최적화된 z 채택
+  - 최적화가 오히려 악화시킨 경우 → 원래 z 유지
+  - logging: `accepted_mask`, `num_accepted`, `num_rejected`
+- **핵심 차별점**: 각 batch element가 **독립적으로** termination + accept/reject 판단
+  - ReSample 공식 레포: 전체 배치 평균 loss로 termination → 일부 element가 다른 element에 영향 받음
+  - 우리 구현: element별 init_loss/cur_loss 추적, terminated mask로 gradient 차단, accept_mask로 채택 여부 결정
+
+**2. `sample()` 수정**:
+- Diffusion loop 완료 후 마지막에 optimization 수행 (`hard_data_consistency == 1`일 때)
+- `zt` (final latent)를 직접 사용 (encode 과정 불필요)
+- `optimization.jsonl` 로깅 추가
+
+**3. Config & Shell Script 업데이트**:
+- `default.yaml`: `hard_data_consistency` (-1=off, 1=on), `optimization_lr`, `optimization_eps`, `optimization_max_iters` 추가
+- `exp4_optimization.sh`: 실험 1 세팅 (scale=10) + `hard_data_consistency=1`로 optimization 활성화
+
+**4. Logging**:
+- `optimization.jsonl`: 이미지별 optimization 상세 로그
+  ```json
+  {"image_idx": 0, "init_losses": [...], "final_losses": [...],
+   "final_iters": [...], "termination_reasons": [...],
+   "accepted_mask": [true, true, false, true], "num_accepted": 3, "num_rejected": 1,
+   "total_time_seconds": 12.3, "lr": 0.005, "eps": 0.001, "max_iters": 500}
+  ```
+- `metrics.json`: `metadata.optimization` 섹션에 summary 저장
+- `vram.segments['optimization']`: optimization 구간 peak VRAM 기록
+
+**5. Exp 1~3에서 Optimization 비활성화 확인**:
+- `exp0_baseline.sh`: `hard_data_consistency=-1` ✅
+- `exp1_repulsion.sh`: `hard_data_consistency=-1` ✅
+- `exp2_pruning.sh`: `hard_data_consistency=-1` ✅
+- `exp3_2particle.sh`: `hard_data_consistency=-1` ✅
+- **Exp 4에서만** `HARD_DATA_CONSISTENCY=1`로 활성화
+
+**6. 파일 변경 목록**:
+- `sampler.py`: `_latent_optimization()`, `sample()` 수정
+- `posterior_sample.py`: optimization kwargs 전달, `optimization.jsonl` 저장, `metrics.json` 업데이트
+- `configs/default.yaml`: optimization hyperparameters 추가
+- `commands_gpu/exp4_optimization.sh`: 실험 설정 업데이트
+
+**명령어**:
+```bash
+bash commands_gpu/exp4_optimization.sh --1    # 1 image sanity check
+bash commands_gpu/exp4_optimization.sh --10   # 10 images main experiment
+```
+
+**VRAM segments 구조** (최종):
 ```json
-// Exp4 (pruning + optimization)
+// Exp4 (optimization only, pruning OFF)
+"vram": {
+  "peak_memory_mb": 10209.0,
+  "segments": {
+    "optimization": 5800.0
+  }
+}
+
+// Exp4 + Exp2 조합 (pruning + optimization) - 향후 확장
 "vram": {
   "peak_memory_mb": 10209.0,
   "segments": {
@@ -302,7 +371,77 @@ results/<run_name>/
   }
 }
 ```
-→ 실험별로 필요한 segment만 `vram_segments` dict에 추가하면 됨. `sampler.py`에서 optimization 시점에 `self.vram_segments['optimization'] = ...` 추가 예정.
+
+#### (참고) ReSample 원본 레포 코드 분석
+
+Diffusion Timesteps
+
+- 총 timesteps: 1000 (configs/latent-diffusion/ffhq-ldm-vq-4.yaml:9)
+- ddim_use_original_steps=True로 설정되어 있어 전체 1000 스텝 사용
+
+---
+Optimization 횟수
+
+코드에서 splits = 3으로 설정되어 있어 1000 스텝을 3개 구간으로 나눕니다:
+- index_split = 1000 // 3 ≈ 333
+
+Pixel Space Optimization (ddim.py:337-370)
+
+- 조건: index >= 333 (즉, timestep 333~666 구간)
+- 호출 빈도: 매 10 스텝마다 (index % 10 == 0)
+- 호출 횟수: 약 33번
+- 각 호출당 max iterations: 2000 (early stopping 있음)
+- optimizer: AdamW, lr=1e-2
+
+Latent Space Optimization (ddim.py:373-432)
+
+- 조건: index < 333 (즉, timestep 0~332 구간)
+- 호출 빈도: 매 10 스텝마다 (index % 10 == 0)
+- 호출 횟수: 약 33번 + 마지막에 1번 추가 (line 329-332)
+- 각 호출당 max iterations: 500 (early stopping 있음)
+- optimizer: AdamW, lr=5e-3
+
+---
+요약
+
+| 구분         | Timestep 범위  | 호출 횟수 | Max Iterations/호출 |
+|--------------|----------------|-----------|---------------------|
+| Pixel Space  | 333~666        | ~33회     | 2000                |
+| Latent Space | 0~332 + 마지막 | ~34회     | 500                 |
+
+  Latent Space Optimization Hyperparameters
+
+  | Hyperparameter     | 값      | 위치                 |
+  |--------------------|---------|----------------------|
+  | max_iters          | 500     | line 373 (함수 인자) |
+  | lr (learning rate) | 5e-3    | line 394             |
+  | eps (tolerance)    | 1e-3    | line 373 (함수 인자) |
+  | optimizer          | AdamW   | line 399             |
+  | loss function      | MSELoss | line 398             |
+
+  Early Stopping 조건 (2가지)
+
+  1. Loss threshold: cur_loss < eps² (1e-6) → line 428
+  2. Loss plateau: 200 iteration 이후, 초기 loss보다 현재 loss가 크면 종료 → line 419-426
+
+  코드 발췌
+
+  def latent_optimization(self, measurement, z_init, operator_fn, eps=1e-3, max_iters=500, lr=None):
+      if lr is None:
+          lr_val = 5e-3
+      else:
+          lr_val = lr.item()
+
+      loss = torch.nn.MSELoss()
+      optimizer = torch.optim.AdamW([z_init], lr=lr_val)
+
+      # Early stopping logic
+      if itr < 200:
+          losses.append(cur_loss)
+      else:
+          if losses[0] < cur_loss:
+              break
+
 
 ### [실험 5] 결과를 보고 제일 잘 나온 세팅에 대해 100 image 실험을 돌리자. 
 - 이후 particle guidance, 유전알고리즘적 관점의 설명, phase retrieval with 2 oversampling이라는 2-mode task 자체의 특수성, DAPS와 ReSample과의 실행시간 및 GPU 및 연산량 비교
@@ -794,14 +933,14 @@ bash commands_gpu/exp2_pruning.sh --1
     - `num_samples` (int): 한 번에 생성할 입자(이미지)의 개수 (기존 DAPS의 num_samples를 그대로 활용, particle_num 역할)
     - `repulsion_scale` (float): 입자끼리 밀어내는 힘의 초기 강도. 0.0이면 독립 실행 (DAPS baseline), >0.0이면 서로 밀어냄
     - `pruning_step` (int): 가지치기 수행 timestep. -1이면 pruning 없음
-    - `optimization_step` (int): latent optimization 시작 timestep. -1이면 optimization 없음
+    - `hard_data_consistency` (int): latent optimization 시작 timestep. -1이면 optimization 없음
     - `use_tpu` (bool): TPU 사용 여부.
     - (num_eval_images는 data config에서 제어)
 - 실험별 argument 세팅 가이드:
     Exp 0: Baseline (DAPS Replication)particle_num=4, repulsion_scale=0.0:이렇게 설정하면 4개의 입자가 서로 간섭하지 않으므로, DAPS 논문에서 "1개씩 4번 돌린 것(4 runs)"과 수학적으로 완전히 동일한 결과를 냅니다. (시드만 잘 제어된다면)이것이 우리의 Reference 성능이 됩니다.
     Exp 1: Repulsion Onlyrepulsion_scale > 0:이제 4개의 입자가 서로 밀어냅니다.목표: Exp 0보다 **다양성(Std)**이 높고, **최고점(Max PSNR)**이 높게 나오는지 확인합니다.
     Exp 2: Efficiency (Pruning)pruning_step=200:코드는 $t=200$이 되는 순간, Loss와 Distance를 계산하여 **4개 중 2개를 메모리에서 삭제(또는 Masking)**해야 합니다.목표: Exp 1과 성능은 비슷한데, **시간(Time)과 메모리(VRAM)**가 줄어드는지 확인합니다.
-    Exp 4: Quality (Optimization)optimization_step=200:$t=1000 \to 201$까지는 Repulsion으로 탐색하고,$t=200 \to 0$부터는 Repulsion을 끄고(scale=0 강제 적용), Latent Optimization을 켭니다.목표: Exp 2보다 PSNR이 확실히 더 올라가는지 확인합니다.
+    Exp 4: Quality (Optimization)hard_data_consistency=200:$t=1000 \to 201$까지는 Repulsion으로 탐색하고,$t=200 \to 0$부터는 Repulsion을 끄고(scale=0 강제 적용), Latent Optimization을 켭니다.목표: Exp 2보다 PSNR이 확실히 더 올라가는지 확인합니다.
 - metric.json에 phase별 time, gpu, optimization 횟수/시간을 기록할 것
 - metric.json을 Parsing하는 코드를 만들 것
 - 코드 실행을 통한 sanity check는 GPU가 달린 서버에서 진행할 예정! (로컬 맥북 X)
@@ -811,7 +950,7 @@ bash commands_gpu/exp2_pruning.sh --1
 - ~~command 파일들에 새로운 argument들 반영 및 1/10/100 image용 command 추가~~ → **완료**: 폴더 구조:
     - `commands_gpu/`: GPU (CUDA) 전용 명령어 (use_tpu=false)
     - 각 폴더에 `exp0_baseline.sh` ~ `exp5_final.sh` 포함
-    - 모든 command에 `repulsion_scale`, `pruning_step`, `optimization_step`, `data.end_id` 반영
+    - 모든 command에 `repulsion_scale`, `pruning_step`, `hard_data_consistency`, `data.end_id` 반영
 
 
 

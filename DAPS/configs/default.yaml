@@ -29,4 +29,7 @@ repulsion_dino_model: 'dino_vits16'  # DINO model variant for feature extraction
 pruning_step: -1  # 가지치기 수행 timestep. -1이면 pruning 없음, 양수면 해당 timestep에서 pruning
 
 # Hard Data Consistency (ReSample-style Latent Optimization) 설정
-optimization_step: -1  # latent optimization 시작 timestep. -1이면 optimization 없음, 양수면 해당 timestep부터 시작
+hard_data_consistency: -1  # -1이면 off, 1이면 on (맨 마지막 timestep에서 latent optimization 수행)
+optimization_lr: 5e-3  # ReSample default: 5e-3
+optimization_eps: 1e-3  # Tolerance for early stopping. cur_loss < eps² → terminate
+optimization_max_iters: 500  # ReSample default: 500
