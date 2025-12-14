@@ -43,13 +43,12 @@ fi
 
 # ============================================================
 # Repulsion Hyperparameters
-# - scale=50: RLSD gamma=50 (HDR task) 기준
+# - scale: 튜닝 중 (scale=50은 너무 강함, scale=0.1~1.0은 효과 없음)
+#   → scale=10부터 시작, ratio_scaled_to_score 0.1~0.3 목표
 # - sigma_break=1.0: σ ∈ [1,10] 구간만 ON (~30/50 step)
-#   (RLSD는 더 오래 켜둠. 0.1/0.01로 낮추면 ON 구간 확장)
-# - schedule=constant: 추가 decay 없이 상수 scale 유지
-#   (EDM score-ε 변환 시 σ 곱해지는 효과로 RLSD gamma×sigma와 유사해짐)
+# - schedule=constant: 추가 decay 없
 # ============================================================
-REPULSION_SCALE=50            # RLSD gamma 기준 (HDR: 50, Free mask: 150)
+REPULSION_SCALE=10            # 튜닝 중: 10 → ratio 보고 5 또는 15로 조정
 REPULSION_SIGMA_BREAK=1.0     # σ < 1.0에서 OFF (더 긴 ON: 0.1 또는 0.01)
 REPULSION_SCHEDULE="constant" # 추가 decay 없음 (σ-decay는 score→ε 변환에서 자연 발생)
 
@@ -76,7 +75,7 @@ if [ "$RUN_1" = true ]; then
     pruning_step=-1 \
     optimization_step=-1 \
     data.end_id=1 \
-    name=exp1_sanity_check \
+    name=exp1_sanity_check_scale${REPULSION_SCALE} \
     gpu=0
 fi
 
@@ -102,7 +101,7 @@ if [ "$RUN_10" = true ]; then
     pruning_step=-1 \
     optimization_step=-1 \
     data.end_id=10 \
-    name=exp1_10img \
+    name=exp1_10img_scale${REPULSION_SCALE} \
     gpu=0
 fi
 
@@ -129,7 +128,7 @@ if [ "$RUN_90" = true ]; then
     optimization_step=-1 \
     data.start_id=10 \
     data.end_id=100 \
-    name=exp1_90img \
+    name=exp1_90img_scale${REPULSION_SCALE} \
     gpu=0
 fi
 

@@ -488,6 +488,56 @@ ReSample 적용 시점: $T=200$ (Low noise) 시점은 이미 이미지가 거의
 3. **Pairwise distance 디버깅**: repulsion이 실제로 latent separation을 유도하는지 step별 로깅 강화
 4. **실험 2 (Pruning) 진행**: 4→2 pruning으로 효율성 + 성능 양립 검증
 
+### [실험 1] Sanity Check (2025-12-14 KST) - scale=50 ⚠️ 실패
+
+#### 목적
+- scale=0.1~1.0에서 pairwise distance가 ~32로 변화 없어서, RLSD gamma=50 수준으로 대폭 상향
+- repulsion이 실제로 작동하는지 확인
+
+#### 결과: Repulsion 작동 확인 ✅, 하지만 너무 강함 💀
+
+| Metric | scale=0.1 | scale=50 | 변화 |
+|--------|-----------|----------|------|
+| **Best PSNR** | 11.24 | **6.49** | **-4.75 dB** 💀 |
+| Best SSIM | 0.565 | 0.074 | -0.49 |
+| Best LPIPS | 0.495 | 0.690 | +0.20 (worse) |
+| **Pairwise Dist** | 32.13 | **128.94** | **+4x** ✅ |
+
+#### Repulsion 로그 분석 (`repulsion.jsonl`)
+
+| Step | σ | ratio_scaled_to_score | Pairwise Dist | 해석 |
+|------|-----|----------------------|---------------|------|
+| 0 | 10.0 | **1.53 (153%)** | 21.1 | ⚠️ repulsion > score |
+| 1 | 9.3 | 0.65 (65%) | 44.5 | 여전히 매우 강함 |
+| 2 | 8.7 | 0.12 (12%) | 105.6 | 입자 분리 시작 |
+| 5 | 7.1 | 0.046 (4.6%) | 129.3 | 적정 수준 |
+| 10 | 4.9 | 0.026 (2.6%) | 136.9 | |
+| 30+ | <1.0 | 0.0 (OFF) | - | sigma_break로 OFF |
+
+#### 분석
+
+**Good**:
+- Repulsion이 **확실히 작동함**: pairwise distance 32 → 129 (4배 증가)
+- 디버깅 로깅(`repulsion.jsonl`)이 정상 작동
+
+**Bad**:
+- step 0에서 `ratio_scaled_to_score=1.53` → repulsion이 score의 **153%**
+- Diffusion process 자체가 붕괴 → 이미지 생성 실패 (PSNR 6 dB)
+
+#### 결론 및 다음 단계
+
+- **scale=0.1~1.0**: 효과 없음 (ratio < 0.01, pairwise dist ~32)
+- **scale=50**: 너무 강함 (ratio > 1.0, 이미지 생성 붕괴)
+- **적정 범위 추정**: ratio_scaled_to_score가 **0.05~0.2** 정도 되려면 **scale=5~15** 필요 => 10 해본 뒤 5 / 15 택1 추가 진행 예정!
+- 결과 폴더: `results/exp1_repulsion/imagenet_1img/exp1_sanity_check_scale50/`
+
+#### Scale 튜닝 전략 (2025-12-14)
+
+1. **scale=10 먼저 시도**
+2. step 0에서 `ratio_scaled_to_score` 확인:
+   - ratio가 **0.3~0.5 이상**이면 → **scale=5**로 내리기
+   - ratio가 **0.05 미만**으로 효과 약하면 → **scale=15**로 올리기
+3. 목표: ratio가 **0.1~0.3** 범위, pairwise distance 증가하면서 PSNR 유지
 
 ## 프로젝트 기대 결과: 보다 적은 연산으로 비슷하거나 더 좋은 성능을!
 - DAPS에서 Phase Retrieval의 불안정성을 고려하여, 4번의 independent runs을 수행한 뒤 가장 좋은 결과를 선택하여 보고했으니, 우리플젝을 DAPS 4 run이랑 비교했을때 시간xGPU 사용량이 비슷하거나 작으면서 성능이 비슷하거나 높음을 보이면 되는 것!
