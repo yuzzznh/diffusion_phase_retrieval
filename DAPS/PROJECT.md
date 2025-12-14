@@ -372,6 +372,52 @@ bash commands_gpu/exp4_optimization.sh --10   # 10 images main experiment
 }
 ```
 
+### [실험 4] Quick Test (2025-12-14 23:04 KST) - Optimization 로직 검증 ✅ 완료
+
+#### 실험 설정 (빠른 검증용)
+| Parameter | Value |
+|-----------|-------|
+| Annealing Steps | 5 (정식: 50) |
+| Optimization Max Iters | 50 (정식: 500) |
+| Repulsion Scale | 10 |
+| Pruning | OFF (-1) |
+
+#### 명령어
+```bash
+python posterior_sample.py ... sampler.annealing_scheduler_config.num_steps=5 optimization_max_iters=50 ...
+```
+
+#### 결과: Optimization 로직 정상 동작 ✅
+
+| 항목 | 결과 |
+|------|------|
+| 에러 없이 완료 | ✅ |
+| optimization.jsonl 생성 | ✅ |
+| 4개 샘플 모두 처리 | ✅ |
+| VRAM segments 기록 | ✅ |
+
+#### Optimization 상세
+
+| Sample | Init Loss | Final Loss | 감소율 | Termination |
+|--------|-----------|------------|--------|-------------|
+| 0 | 0.0326 | 0.0308 | -5.8% | max_iters |
+| 1 | 0.0201 | 0.0184 | -8.5% | max_iters |
+| 2 | 0.0196 | 0.0181 | -7.8% | max_iters |
+| 3 | 0.0280 | 0.0257 | -8.2% | max_iters |
+
+- **모든 샘플이 loss 감소** → optimization 정상 동작
+- **max_iters에서 종료** → 50 iter로는 수렴 안 됨 (eps²=1e-6 기준)
+- **Optimization 시간**: 17.5초 (4 샘플)
+
+#### 버그 수정 (검증 중 발견)
+- `operator.operator` → `operator.op` 수정 (`LatentWrapper` 구조에 맞게)
+
+#### 결과 폴더
+- `results/exp4_optimization/imagenet_1img/exp4_quick_test/`
+
+#### 다음 단계
+- **정식 Sanity Check**: `bash commands_gpu/exp4_optimization.sh --1` (50 step, 500 iter)
+
 #### (참고) ReSample 원본 레포 코드 분석
 
 Diffusion Timesteps
@@ -777,17 +823,22 @@ step 0 ratio가 **0.0625 (6.25%)** 로 안전+영향 있는 구간(0.05~0.2)에 
 - → scale=5를 "안전 버전"으로 비교 (15는 오히려 위험 쪽)
 
 
-#### 진행 상황 (2025-12-14)
+#### 진행 상황 (2025-12-14 23:00 KST 업데이트)
 
-| 순서 | 실험 | 상태 | 목적 |
-|------|------|------|------|
-| 0 | Exp1 sanity check (4p, scale=10) | ✅ **완료** | scale 튜닝 → **Sweet Spot 확정** |
-| 1 | Exp3 sanity check (2p, scale=10) | ✅ **완료** | N=2 안정성 확인 → **2p 대비 4p 우위 확인! (가설대로)** |
-| 2 | Exp1 10 images (4p, scale=10) | ⏳ 대기 | 재현성 검증 |
-| 3 | Exp3 10 images (2p, scale=10) | ⏳ 대기 | 2p vs 4p 비교 |
+| 순서 | 실험 | 상태 | 목적 | 결과 요약 |
+|------|------|------|------|-----------|
+| 0 | Exp1 sanity check (4p, scale=10) | ✅ **완료** | scale 튜닝 | Best PSNR 20.66 dB |
+| 1 | Exp3 sanity check (2p, scale=10) | ✅ **완료** | N=2 안정성 확인 | 4p 대비 -10 dB (가설 확인) |
+| 2 | Exp2 sanity check (4→2, scale=10) | ✅ **완료** | Pruning 검증 | -5.95 dB ⚠️ |
+| 3 | Exp2 10img (4→2, scale=10) | ✅ **완료** | Pruning 통계 | -2.19 dB, 시간 -18%, VRAM -40% |
+| 4 | Exp4 quick test (5 step) | ✅ **완료** | Optimization 로직 검증 | Loss 감소 확인 ✅ |
+| 5 | Exp4 sanity check (50 step) | 🔄 **대기** | Optimization 효과 검증 | - |
+| 6 | Exp1 10 images (4p, scale=10) | ⏳ 대기 | 재현성 검증 | - |
 
-- Exp1 결과 폴더: `results/exp1_repulsion/imagenet_1img/exp1_sanity_check_scale10/`
-- Exp3 결과 폴더: `results/exp3_2particle/imagenet_1img/exp3_sanity_check_scale10/`
+- Exp1 결과: `results/exp1_repulsion/imagenet_1img/exp1_sanity_check_scale10/`
+- Exp2 결과: `results/exp2_pruning/imagenet_10img/exp2_10img_scale10_prune29/`
+- Exp3 결과: `results/exp3_2particle/imagenet_1img/exp3_sanity_check_scale10/`
+- Exp4 결과: `results/exp4_optimization/imagenet_1img/exp4_quick_test/`
 
 ### [실험 3] Sanity Check (2025-12-14 KST) - scale=10, 2-particle ✅ 완료
 

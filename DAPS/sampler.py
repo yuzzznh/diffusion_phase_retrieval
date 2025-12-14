@@ -291,7 +291,8 @@ class LatentDAPS(DAPS):
             x_decoded = model.decode(z_opt)
 
             # Forward through operator: A(D(z))
-            y_pred = operator.operator.forward(x_decoded)
+            # Note: operator is LatentWrapper, operator.op is the actual measurement operator
+            y_pred = operator.op(x_decoded)
 
             # Compute per-element MSE loss
             # Reshape to [B, -1] and compute mean over non-batch dims
@@ -349,7 +350,7 @@ class LatentDAPS(DAPS):
         # Set final values for any remaining active elements
         with torch.no_grad():
             x_decoded = model.decode(z_opt)
-            y_pred = operator.operator.forward(x_decoded)
+            y_pred = operator.op(x_decoded)
             y_pred_flat = y_pred.view(batch_size, -1)
             measurement_flat = measurement.view(batch_size, -1)
             final_cur_losses = ((y_pred_flat - measurement_flat) ** 2).mean(dim=1)
