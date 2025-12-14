@@ -914,8 +914,96 @@ bash commands_gpu/exp2_pruning.sh --1
 - `results/exp2_pruning/imagenet_1img/exp2_sanity_check_scale10_prune29/`
 
 #### 다음 단계
-- **10 image 실험 진행**: 1 이미지에서는 운 나쁘게 best sample이 pruning됨. 통계적으로 pruning이 평균적으로 성능을 유지하는지 검증 필요.
+- ~~**10 image 실험 진행**: 1 이미지에서는 운 나쁘게 best sample이 pruning됨. 통계적으로 pruning이 평균적으로 성능을 유지하는지 검증 필요.~~ → **완료** (아래 참조)
 - **Pruning 기준 개선 검토**: measurement loss 외 다른 기준 (diversity-aware pruning 등) 고려 가능
+
+### [실험 2] 10 Images (2025-12-14 22:25 KST) - 4→2 Pruning ✅ 완료
+
+#### 실험 설정
+| Parameter | Value |
+|-----------|-------|
+| Particles | 4 → 2 (pruning) |
+| Repulsion Scale | 10 |
+| Sigma Break | 1.0 |
+| Pruning Step | 29 |
+| Images | 10 |
+
+#### 명령어
+```bash
+bash commands_gpu/exp2_pruning.sh --10
+```
+
+#### Exp0 Baseline vs Exp2 Pruning 비교
+
+| Metric | Exp0 (4 samples) | Exp2 (4→2 prune) | 차이 |
+|--------|------------------|------------------|------|
+| **Best PSNR Mean** | **17.50 dB** | **15.31 dB** | **-2.19 dB ⚠️** |
+| Best PSNR Std | 3.67 | 3.23 | -0.44 |
+| Mean of Means | 15.49 dB | 14.32 dB | -1.17 dB |
+| Best SSIM | 0.550 | 0.491 | -0.059 |
+| Best LPIPS | 0.558 | 0.615 | +0.057 (↑worse) |
+| **Time (total)** | **9,060초** | **7,406초** | **-18% 절약** |
+| Time (per img) | 903초 | 737초 | -166초 |
+| VRAM (post) | 10,161 MB | 6,101 MB | **-40% 절약** |
+
+#### 이미지별 Best PSNR 비교
+
+| Image | Exp0 Best | Exp2 Best | 차이 | 평가 |
+|-------|-----------|-----------|------|------|
+| 0 | 14.92 dB | 11.07 dB | -3.85 | ❌ |
+| 1 | 19.35 dB | 16.78 dB | -2.57 | ❌ |
+| 2 | 15.12 dB | 12.91 dB | -2.21 | ❌ |
+| 3 | 19.39 dB | 15.14 dB | -4.25 | ❌ |
+| 4 | 13.93 dB | 15.53 dB | **+1.60** | ✅ |
+| 5 | 18.51 dB | 16.87 dB | -1.64 | ❌ |
+| 6 | 20.78 dB | 19.71 dB | -1.07 | ❌ |
+| 7 | 19.21 dB | 12.73 dB | -6.48 | ❌ |
+| 8 | 10.28 dB | 11.25 dB | **+0.97** | ✅ |
+| 9 | 23.48 dB | 21.09 dB | -2.39 | ❌ |
+
+- **개선**: 2/10 이미지 (20%)
+- **하락**: 8/10 이미지 (80%)
+
+#### Pruning 분석 (`pruning.jsonl`)
+
+| Image | Kept | Pruned | Loss Range | 특이사항 |
+|-------|------|--------|------------|----------|
+| 0 | [0,3] | [1,2] | 1291~1326 | |
+| 1 | [1,3] | [0,2] | 1549~1627 | |
+| 2 | [0,2] | [1,3] | 2033~2235 | |
+| 3 | [0,1] | [2,3] | 1495~4662 | loss 차이 큼 |
+| 4 | [0,3] | [1,2] | 1660~4080 | loss 차이 큼 |
+| 5 | [1,3] | [0,2] | 1487~1599 | |
+| 6 | [1,3] | [0,2] | 1241~1539 | |
+| 7 | [0,2] | [1,3] | 1507~2761 | loss 차이 큼 |
+| 8 | [1,2] | [0,3] | 1499~1961 | |
+| 9 | [0,2] | [1,3] | 1351~1486 | |
+
+#### 핵심 발견 ⚠️
+
+1. **PSNR 하락 확인**: 10개 이미지 중 8개에서 Best PSNR 하락 (평균 -2.19 dB)
+2. **효율성 확보**: 시간 -18%, VRAM -40% 절약 (기대대로)
+3. **Pruning 정확도 문제**: Step 29의 measurement loss가 최종 PSNR을 예측 못함
+   - 특히 Image 3, 4, 7에서 loss 차이가 큰데도 pruning된 샘플이 더 좋았을 가능성
+
+#### 결론
+
+| 항목 | 평가 |
+|------|------|
+| 시간 절약 | ✅ -18% (기대 충족) |
+| VRAM 절약 | ✅ -40% (기대 초과) |
+| **성능 유지** | ❌ **-2.19 dB (기대 미충족)** |
+
+**문제**: Pruning 기준(step 29 measurement loss)이 최종 품질(PSNR)과 불일치
+
+#### 개선 방향 검토
+1. **Pruning 시점 변경**: step 29 → step 35~40 (더 늦게)
+2. **보수적 pruning**: 4→3 또는 4→2 대신 measurement loss 차이가 클 때만 pruning
+3. **Diversity-aware pruning**: loss + pairwise distance 동시 고려
+4. **Exp1과 직접 비교**: Exp1 10 images 결과와 비교 필요 (repulsion 효과 분리)
+
+#### 결과 폴더
+- `results/exp2_pruning/imagenet_10img/exp2_10img_scale10_prune29/`
 
 ## 프로젝트 기대 결과: 보다 적은 연산으로 비슷하거나 더 좋은 성능을!
 - DAPS에서 Phase Retrieval의 불안정성을 고려하여, 4번의 independent runs을 수행한 뒤 가장 좋은 결과를 선택하여 보고했으니, 우리플젝을 DAPS 4 run이랑 비교했을때 시간xGPU 사용량이 비슷하거나 작으면서 성능이 비슷하거나 높음을 보이면 되는 것!
