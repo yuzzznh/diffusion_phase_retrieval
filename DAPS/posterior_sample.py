@@ -325,7 +325,8 @@ def main(args):
     # ============================================================
     # metrics.json에 metadata 추가 (timing, memory, hyperparameters, repulsion)
     # ============================================================
-    from datetime import datetime
+    from datetime import datetime, timezone, timedelta
+    KST = timezone(timedelta(hours=9))
 
     # Repulsion summary (Exp 1/3)
     repulsion_summary = {}
@@ -336,7 +337,7 @@ def main(args):
         }
 
     results['metadata'] = {
-        'timestamp': datetime.now().isoformat(),
+        'timestamp': datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S KST'),
         'num_images': total_number,
         'num_samples': num_samples,
         'hyperparameters': {

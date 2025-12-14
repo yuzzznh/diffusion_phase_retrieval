@@ -57,7 +57,7 @@ $ bash commands_gpu/exp0_baseline.sh
 
 #### 구현 완료 사항 (RLSD → LatentDAPS 이식)
 - ~~`repulsion.py` 모듈 생성~~: **완료**
-  - `DinoFeatureExtractor`: DINO-ViT 모델 lazy loading 및 feature 추출
+  - `DinoFeatureExtractor`: DINO-ViT 모델 lazy loading 및 feature 추출 (`dino_vits16`, RLSD와 동일)
   - `compute_repulsion_gradient()`: SVGD-style repulsion gradient 계산 (RBF kernel + median heuristic bandwidth)
   - `RepulsionModule`: High-level repulsion 관리 (scale decay, metrics tracking)
   - **N=2 버그 수정**: `h = median(dist)^2 / max(log(N), eps)` 사용 (RLSD의 `log(N-1)` 대신)
@@ -71,6 +71,54 @@ $ bash commands_gpu/exp0_baseline.sh
   - `repulsion_scale`, `repulsion_sigma_break`, `repulsion_schedule`, `repulsion_dino_model`
 - ~~Shell scripts 업데이트~~: **완료**
   - `exp1_repulsion.sh`, `exp3_2particle.sh`에 새 repulsion 파라미터 반영
+
+#### Hyperparameter: `repulsion_scale`과 RLSD `gamma`의 관계
+
+**RLSD 구현** (noise prediction space):
+```python
+noise_pred = ε - γ · √(1-α_t) · ∇Φ   # γ = gamma (50~150)
+```
+
+**우리 구현** (score space):
+```python
+score' = score + λ · ∇Φ              # λ = repulsion_scale
+```
+
+**핵심**: Score 공간에서 `+λ·r`을 하면, ε 공간에서는 이미 `σ·λ`가 곱해진 효과가 생긴다 (EDM score-ε 변환 관계).
+따라서 **σ를 추가로 곱하지 않고**, `repulsion_scale`을 RLSD의 `gamma` 수준으로 올리면 동형(equivalent)하게 동작한다.
+
+| RLSD gamma | 우리 repulsion_scale | 비고 |
+|------------|---------------------|------|
+| 30 | 30 | Phase retrieval 기본값 |
+| 50 | 50 | HDR 등 다른 task |
+| 100~150 | 100~150 | 강한 repulsion |
+
+**결론**: `repulsion_scale=0.5~1.0`은 RLSD 대비 너무 약함. **30, 50, 100** 등으로 실험 필요.
+
+#### Hyperparameter: `repulsion_sigma_break` 활성 구간
+
+**우리 설정** (EDM sigma 기준):
+```
+sigma_max: 10
+sigma_min: 0.001
+repulsion_sigma_break: 1.0 (default)
+```
+
+**Repulsion 활성 구간**:
+```
+sigma:  10 -------- 1.0 -------- 0.001
+         [  ON  ]   |   [  OFF  ]
+                    ↑
+              sigma_break
+```
+
+| sigma 범위 | Repulsion | 비고 |
+|-----------|-----------|------|
+| 1.0 ~ 10 | ✅ ON | 전체 50 step 중 ~30 step |
+| 0.001 ~ 1.0 | ❌ OFF | 마지막 ~20 step |
+
+**RLSD와 비교**: RLSD는 `sigma_break=999` (DDPM timestep)로 **거의 전 구간 ON**.
+우리도 더 오래 켜두려면 `sigma_break`를 낮추면 됨 (예: 0.1 또는 0.01).
 
 * 설정: 입자 4개, 처음부터 끝까지($T \to 0$) 유지.
 * 비교: Ours (Repulsion ON) vs. DAPS Baseline (Repulsion OFF, Independent)
@@ -198,7 +246,7 @@ ReSample 적용 시점: $T=200$ (Low noise) 시점은 이미 이미지가 거의
 
 ### [실험 0] Baseline 결과 (LatentDAPS 4-run Independent)
 
-#### ImageNet 10 Images (2025-12-13)
+#### ImageNet 10 Images (2025-12-13 KST)
 | Metric | Value | 비고 |
 |--------|-------|------|
 | **Best PSNR Mean** | **17.50 dB** | 논문 100img: 20.54 dB |
@@ -229,7 +277,7 @@ ReSample 적용 시점: $T=200$ (Low noise) 시점은 이미 이미지가 거의
 - **높은 std 이미지**: img 7 (3.92), img 9 (2.85) → Phase retrieval의 multi-modal 특성 반영
 - **어려운 이미지**: img 8 (best=10.28) → 일부 이미지에서 성능 저하
 
-### [실험 1] Repulsion Sanity Check (2025-12-13)
+### [실험 1] Repulsion Sanity Check (2025-12-13 KST)
 
 #### Exp0 vs Exp1 Sanity Check 비교 (1 Image)
 | Metric | Exp0 (Baseline) | Exp1 (Repulsion) | 차이 |
@@ -262,6 +310,102 @@ ReSample 적용 시점: $T=200$ (Low noise) 시점은 이미 이미지가 거의
   3. 같은 seed 사용으로 trajectory가 비슷하게 수렴했을 가능성
 - **Overhead 미미**: 시간 +1.1%, VRAM +0.9% → repulsion 연산 비용 낮음
 - **다음 단계**: `repulsion_scale` 조정 또는 10 image 실험으로 효과 검증 필요
+
+### [실험 1/3] Overnight Scale Grid Search (2025-12-14 KST)
+
+#### 핵심 요약
+| 실험 | Particles | Scale | Best PSNR | Time | VRAM |
+|------|-----------|-------|-----------|------|------|
+| Exp0 Baseline | 4 | 0.0 | 17.50 | 100% | 100% |
+| **Exp1-B (Best)** | 4 | 1.0 | **17.68** (+0.18) | +1.4% | +0.9% |
+| Exp3-B | 2 | 1.0 | 17.35 (-0.15) | **-48%** | **-40%** |
+
+#### 실험 설정
+| 실험 | num_samples | repulsion_scale | 목표 |
+|------|-------------|-----------------|------|
+| Exp1-A | 4 | 0.5 | scale 증가 효과 확인 |
+| Exp1-B | 4 | 1.0 | 더 강한 repulsion 효과 확인 |
+| Exp3-A | 2 | 0.5 | 2-particle baseline |
+| Exp3-B | 2 | 1.0 | 2-particle + 강한 repulsion |
+
+#### 전체 비교 결과 (10 Images)
+
+| 실험 | Particles | Scale | Best PSNR ↑ | Std | Mean of Means | Time (초) | VRAM (MB) |
+|------|-----------|-------|-------------|-----|---------------|-----------|-----------|
+| **Exp0 Baseline** | 4 | 0.0 | **17.50** | 3.67 | 15.49 | 9,060 | 10,161 |
+| Exp1-A | 4 | 0.5 | 17.54 (+0.04) | 3.45 | 15.50 | 9,182 (+1.3%) | 10,252 |
+| **Exp1-B** | 4 | 1.0 | **17.68 (+0.18)** | 3.20 | 15.56 | 9,191 (+1.4%) | 10,252 |
+| Exp3-A | 2 | 0.5 | 17.20 (-0.30) | 3.67 | 16.04 | 4,694 (-48%) | 6,100 |
+| Exp3-B | 2 | 1.0 | 17.35 (-0.15) | 3.68 | 16.14 | 4,694 (-48%) | 6,100 |
+
+#### SSIM / LPIPS 비교
+
+| 실험 | Best SSIM ↑ | Best LPIPS ↓ |
+|------|-------------|--------------|
+| Exp0 Baseline | 0.550 | 0.558 |
+| Exp1-A (s=0.5) | 0.550 | 0.562 |
+| Exp1-B (s=1.0) | 0.552 | 0.556 |
+| Exp3-A (s=0.5) | 0.535 | 0.568 |
+| Exp3-B (s=1.0) | 0.544 | 0.563 |
+
+#### Repulsion Metrics
+
+| 실험 | Mean Pairwise Distance | Repulsion Time (초) |
+|------|------------------------|---------------------|
+| Exp1-A (4p, s=0.5) | 32.09 | 10.9 |
+| Exp1-B (4p, s=1.0) | 32.22 | 10.8 |
+| Exp3-A (2p, s=0.5) | 32.21 | 5.6 |
+| Exp3-B (2p, s=1.0) | 32.22 | 5.6 |
+
+#### 이미지별 Best PSNR 상세 비교
+
+| Img | Exp0 (4p,s=0) | Exp1-A (4p,s=0.5) | Exp1-B (4p,s=1.0) | Exp3-A (2p,s=0.5) | Exp3-B (2p,s=1.0) |
+|-----|---------------|-------------------|-------------------|-------------------|-------------------|
+| 0 | 14.92 | 14.92 | 14.92 | 13.86 | 13.86 |
+| 1 | 19.35 | 19.38 | 19.35 | 19.35 | 19.38 |
+| 2 | 15.12 | **15.85** | 14.41 | 14.52 | **15.91** |
+| 3 | 19.39 | **19.57** | 18.97 | 19.27 | 19.32 |
+| 4 | 13.93 | 13.72 | **13.68** | 12.20 | **13.95** |
+| 5 | 18.51 | 18.47 | **18.89** | 18.45 | 18.47 |
+| 6 | 20.78 | 20.55 | **20.99** | 20.53 | 20.55 |
+| 7 | 19.21 | 18.38 | 18.39 | **18.49** | 18.40 |
+| 8 | 10.28 | **11.10** | **13.65** ⭐ | 11.87 | 10.15 |
+| 9 | 23.48 | 23.48 | **23.55** | 23.47 | 23.47 |
+
+- ⭐ **Image 8**: Exp1-B(s=1.0)에서 +3.37 dB 극적 개선 (10.28→13.65)
+- Bold: 해당 row에서 최고 성능
+
+#### 관찰 및 분석
+
+**1. Scale 효과 (Exp1)**
+- scale=0.5 → scale=1.0으로 증가 시 Best PSNR +0.14 dB 개선 (17.54 → 17.68)
+- Baseline 대비 scale=1.0에서 +0.18 dB 개선
+- **결론**: Repulsion이 약간의 성능 향상에 기여하나, 효과가 크지 않음
+
+**2. Particle 수 효과 (Exp1 vs Exp3)**
+- 4 particle → 2 particle 감소 시 Best PSNR ~0.3 dB 하락
+- 하지만 **Mean of Means는 2 particle이 더 높음** (16.04~16.14 vs 15.50~15.56)
+  - 이는 4 particle 중 일부가 낮은 점수를 기록하기 때문
+- 시간/메모리 약 절반으로 절약 (~48% 시간, ~60% VRAM)
+
+**3. Mean Pairwise Distance 이슈** ⚠️
+- **모든 실험에서 ~32로 거의 동일**
+- scale=0.5나 1.0이나 pairwise distance 차이 없음
+- **가능한 원인**:
+  1. DINO feature space에서 이미 충분히 분리되어 있음
+  2. Repulsion gradient가 실제 latent trajectory에 큰 영향을 주지 못함
+  3. Scale이 여전히 부족하거나, score injection 방식의 한계
+
+**4. 효율성 분석**
+- Exp3 (2 particle): 시간 48%, VRAM 60%로 성능 유지 가능
+- Best PSNR은 4 particle이 우세하지만, 효율성 면에서 2 particle도 고려 가능
+
+#### 다음 단계 제안
+
+1. **Scale 추가 실험**: scale=2.0, 5.0 등 더 큰 값으로 repulsion 효과 확인
+2. **Sigma break 조정**: repulsion이 더 오래 유지되도록 sigma_break 낮추기 (0.5, 0.1)
+3. **Pairwise distance 디버깅**: repulsion이 실제로 latent separation을 유도하는지 step별 로깅 강화
+4. **실험 2 (Pruning) 진행**: 4→2 pruning으로 효율성 + 성능 양립 검증
 
 
 ## 프로젝트 기대 결과: 보다 적은 연산으로 비슷하거나 더 좋은 성능을!

@@ -38,11 +38,14 @@ if [ "$RUN_1" = false ] && [ "$RUN_10" = false ] && [ "$RUN_90" = false ]; then
 fi
 
 # ============================================================
-# Repulsion Hyperparameters (Exp1과 동일하게 유지)
+# Repulsion Hyperparameters (Exp1과 동일)
+# - scale=50: RLSD gamma=50 (HDR task) 기준
+# - sigma_break=1.0: σ ∈ [1,10] 구간만 ON (~30/50 step)
+# - schedule=constant: 추가 decay 없음 (σ-decay는 score→ε 변환에서 자연 발생)
 # ============================================================
-REPULSION_SCALE=0.1           # 초기 repulsion 강도
-REPULSION_SIGMA_BREAK=1.0     # sigma 이 값 이하에서 repulsion OFF
-REPULSION_SCHEDULE="linear"   # decay schedule: linear, cosine, constant
+REPULSION_SCALE=50            # RLSD gamma 기준
+REPULSION_SIGMA_BREAK=1.0     # σ < 1.0에서 OFF
+REPULSION_SCHEDULE="constant" # 추가 decay 없음
 
 # ============================================================
 # [실험 3] Sanity Check - 1 image (N=2 bandwidth 버그 수정 확인)

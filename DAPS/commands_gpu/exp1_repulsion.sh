@@ -5,9 +5,11 @@
 # 확인 지표: Max PSNR, Std / Mode Coverage, Mean Pairwise Distance
 #
 # Repulsion Config:
-#   - repulsion_scale: 초기 repulsion 강도 (0.1 default, 튜닝 필요)
-#   - repulsion_sigma_break: 이 sigma 이하에서는 repulsion OFF (default: 1.0)
-#   - repulsion_schedule: 'linear' (sigma 감소에 따라 repulsion decay)
+#   - repulsion_scale=50: RLSD gamma=50 (HDR task) 기준
+#   - repulsion_sigma_break=1.0: σ < 1.0에서 OFF → σ ∈ [1,10] 구간만 ON (~30/50 step)
+#     (RLSD는 보통 더 오래 켜둠. 더 긴 ON 원하면 0.1 또는 0.01로 낮추기)
+#   - repulsion_schedule='constant': 추가 decay 없음
+#     (EDM score-ε 변환에 의해 ε 관점에서 σ가 곱해지는 효과 → RLSD gamma×sigma와 유사)
 #
 # 사용법: bash exp1_repulsion.sh [--1] [--10] [--90]
 #   --1   : 1 image sanity check (이미지 0, repulsion_scale 튜닝용)
@@ -40,11 +42,16 @@ if [ "$RUN_1" = false ] && [ "$RUN_10" = false ] && [ "$RUN_90" = false ]; then
 fi
 
 # ============================================================
-# Repulsion Hyperparameters (튜닝 대상)
+# Repulsion Hyperparameters
+# - scale=50: RLSD gamma=50 (HDR task) 기준
+# - sigma_break=1.0: σ ∈ [1,10] 구간만 ON (~30/50 step)
+#   (RLSD는 더 오래 켜둠. 0.1/0.01로 낮추면 ON 구간 확장)
+# - schedule=constant: 추가 decay 없이 상수 scale 유지
+#   (EDM score-ε 변환 시 σ 곱해지는 효과로 RLSD gamma×sigma와 유사해짐)
 # ============================================================
-REPULSION_SCALE=0.1           # 초기 repulsion 강도
-REPULSION_SIGMA_BREAK=1.0     # sigma 이 값 이하에서 repulsion OFF
-REPULSION_SCHEDULE="linear"   # decay schedule: linear, cosine, constant
+REPULSION_SCALE=50            # RLSD gamma 기준 (HDR: 50, Free mask: 150)
+REPULSION_SIGMA_BREAK=1.0     # σ < 1.0에서 OFF (더 긴 ON: 0.1 또는 0.01)
+REPULSION_SCHEDULE="constant" # 추가 decay 없음 (σ-decay는 score→ε 변환에서 자연 발생)
 
 # ============================================================
 # [실험 1] Sanity Check - 1 image

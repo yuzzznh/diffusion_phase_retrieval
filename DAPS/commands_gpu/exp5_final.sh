@@ -30,8 +30,18 @@ if [ "$RUN_IMAGENET" = false ] && [ "$RUN_FFHQ" = false ]; then
 fi
 
 # ============================================================
-# [실험 5] ImageNet 90 images - Best Setting (10~99, 앞 10개는 다른 실험에서 사용)
+# Repulsion Hyperparameters
 # NOTE: 실험 1~4 결과 보고 best hyperparameter로 업데이트
+# - scale=50: RLSD gamma=50 (HDR task) 기준
+# - sigma_break=1.0: σ ∈ [1,10] 구간만 ON (~30/50 step)
+# - schedule=constant: 추가 decay 없음 (σ-decay는 score→ε 변환에서 자연 발생)
+# ============================================================
+REPULSION_SCALE=50            # RLSD gamma 기준
+REPULSION_SIGMA_BREAK=1.0     # σ < 1.0에서 OFF
+REPULSION_SCHEDULE="constant" # 추가 decay 없음
+
+# ============================================================
+# [실험 5] ImageNet 90 images - Best Setting (10~99, 앞 10개는 다른 실험에서 사용)
 # ============================================================
 if [ "$RUN_IMAGENET" = true ]; then
     echo "========== [실험 5] ImageNet 90 images (10~99) =========="
@@ -45,7 +55,9 @@ if [ "$RUN_IMAGENET" = true ]; then
     num_samples=4 \
     sampler.diffusion_scheduler_config.num_steps=2 \
     sampler.annealing_scheduler_config.num_steps=50 \
-    repulsion_scale=0.1 \
+    repulsion_scale=${REPULSION_SCALE} \
+    repulsion_sigma_break=${REPULSION_SIGMA_BREAK} \
+    repulsion_schedule=${REPULSION_SCHEDULE} \
     pruning_step=25 \
     optimization_step=25 \
     data.start_id=10 \
@@ -70,7 +82,9 @@ if [ "$RUN_FFHQ" = true ]; then
     num_samples=4 \
     sampler.diffusion_scheduler_config.num_steps=2 \
     sampler.annealing_scheduler_config.num_steps=50 \
-    repulsion_scale=0.1 \
+    repulsion_scale=${REPULSION_SCALE} \
+    repulsion_sigma_break=${REPULSION_SIGMA_BREAK} \
+    repulsion_schedule=${REPULSION_SCHEDULE} \
     pruning_step=25 \
     optimization_step=25 \
     data.end_id=100 \
