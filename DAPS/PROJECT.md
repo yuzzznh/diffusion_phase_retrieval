@@ -23,14 +23,15 @@ bash commands_gpu/exp5_final.sh --imagenet        # ImageNet 100
 bash commands_gpu/exp5_final.sh --ffhq            # FFHQ 100
 bash commands_gpu/exp5_final.sh --imagenet --ffhq # 둘 다
 
-# ============================================================
 # 인자 없이 실행하면 사용법 출력:
-# ============================================================
 $ bash commands_gpu/exp0_baseline.sh
-# 사용법: bash exp0_baseline.sh [--1] [--10] [--90]
+
+# 사용법: 
+bash exp0_baseline.sh [--1] [--10] [--90]
 # --1   : 1 image sanity check (이미지 0)
 # --10  : 10 images main experiment (이미지 0~9)
 # --90  : 90 images final eval (이미지 10~99, --10과 합쳐서 100개)
+```
 
 ## 실험 진행 및 구현 과정 설계
 
@@ -93,7 +94,7 @@ score' = score + λ · ∇Φ              # λ = repulsion_scale
 | 50 | 50 | HDR 등 다른 task |
 | 100~150 | 100~150 | 강한 repulsion |
 
-**결론**: `repulsion_scale=0.5~1.0`은 RLSD 대비 너무 약함. **30, 50, 100** 등으로 실험 필요.
+**결론**: `repulsion_scale=0.5~1.0`은 RLSD 대비 너무 약함. 50은 너무 컸음. 10은 적절했음. (KST 12/14 6:37PM 기준)
 
 #### Hyperparameter: `repulsion_sigma_break` 활성 구간
 
@@ -104,18 +105,10 @@ sigma_min: 0.001
 repulsion_sigma_break: 1.0 (default)
 ```
 
-**Repulsion 활성 구간**:
-```
-sigma:  10 -------- 1.0 -------- 0.001
-         [  ON  ]   |   [  OFF  ]
-                    ↑
-              sigma_break
-```
-
 | sigma 범위 | Repulsion | 비고 |
 |-----------|-----------|------|
-| 1.0 ~ 10 | ✅ ON | 전체 50 step 중 ~30 step |
-| 0.001 ~ 1.0 | ❌ OFF | 마지막 ~20 step |
+| 1.0 ~ 10 | ON | 전체 50 step 중 ~30 step |
+| 0.001 ~ 1.0 | OFF | 마지막 ~20 step |
 
 **RLSD와 비교**: RLSD는 `sigma_break=999` (DDPM timestep)로 **거의 전 구간 ON**.
 우리도 더 오래 켜두려면 `sigma_break`를 낮추면 됨 (예: 0.1 또는 0.01).
@@ -183,40 +176,42 @@ results/exp1_repulsion/imagenet_1img/exp1_sanity_check → exp1_sanity_check_sca
 results/exp3_2particle/imagenet_1img/exp3_sanity_check → exp3_sanity_check_scale0.1
 ```
 
-#### Sanity Check 실행 (2025-12-14) - scale=50
+#### Sanity Check 실행 (2025-12-14) - scale=10 (scale=50에서 튜닝 후 확정)
+
 
 ```bash
-# Exp1 (4-particle) sanity check
+# Exp1 (4-particle) sanity check ✅ 완료
 bash commands_gpu/exp1_repulsion.sh --1
-# → results/exp1_repulsion/imagenet_1img/exp1_sanity_check (scale=50)
+# → results/exp1_repulsion/imagenet_1img/exp1_sanity_check_scale10/
 
-# Exp3 (2-particle) sanity check
+# Exp3 (2-particle) sanity check 🔄 실행 중
 bash commands_gpu/exp3_2particle.sh --1
-# → results/exp3_2particle/imagenet_1img/exp3_sanity_check (scale=50)
+# → results/exp3_2particle/imagenet_1img/exp3_sanity_check_scale10/
 ```
 
-**확인할 것**:
-- `repulsion.jsonl`에서 `ratio_scaled_to_score`가 0이 아닌 값인지
-- 초반 step에서 `repulsion_on=true`이고 `repulsion_scale_used=50`인지
-- assert 통과 여부 (에러 없이 완료되면 OK)
-- Exp3 (N=2)에서 bandwidth 버그 수정이 정상 작동하는지 (NaN/crash 없음)
+**확인할 것** (Exp1 scale=10 기준):
+- ~~`repulsion.jsonl`에서 `ratio_scaled_to_score`가 0이 아닌 값인지~~ → ✅ step 0에서 0.0625 (6.25%) 확인
+- ~~초반 step에서 `repulsion_on=true`이고 `repulsion_scale_used=10`인지~~ → ✅ 확인
+- ~~assert 통과 여부 (에러 없이 완료되면 OK)~~ → ✅ 정상 완료
+- Exp3 (N=2)에서 bandwidth 버그 수정이 정상 작동하는지 (NaN/crash 없음) → 🔄 확인 중
 
 * 설정: 입자 4개, 처음부터 끝까지($T \to 0$) 유지.
 * 비교: Ours (Repulsion ON) vs. DAPS Baseline (Repulsion OFF, Independent)
 * 확인할 지표:
-    * Max PSNR: 4개 중 가장 잘 나온 놈의 점수. (우리가 더 높거나 비슷해야 함)
-    * Std / Mode Coverage: 4개가 0도, 180도, 혹은 다른 Local Minima로 얼마나 잘 흩어졌는가?
+    * ~~Max PSNR: 4개 중 가장 잘 나온 놈의 점수. (우리가 더 높거나 비슷해야 함)~~ → ✅ **20.66 dB** (baseline 11.24 대비 +9.42 dB)
+    * ~~Std / Mode Coverage: 4개가 0도, 180도, 혹은 다른 Local Minima로 얼마나 잘 흩어졌는가?~~ → ✅ std=6.12 (높은 분산 = 다양한 mode 탐색)
         * DAPS: 운 나쁘면 4개 다 0도로 쏠림.
         * Ours: 0도, 180도 골고루 나와야 성공.
 * 기대 결론: "단순히 여러 번 돌리는 것(DAPS)보다, 서로 밀어내며 돌리는 것(Ours)이 정답(Global Optima)을 찾을 확률(Success Rate)이 훨씬 높다."
-* 여기에선 particle guidance를 잘 코딩하고 repulsion 강도 등 hyperparameter 값을 적절하게 설정하는 것이 관건. 
+* ~~여기에선 particle guidance를 잘 코딩하고 repulsion 강도 등 hyperparameter 값을 적절하게 설정하는 것이 관건.~~ → ✅ scale=10 확정
 * 이에 대한 sanity check 및 가장 기본적인 경향성 체크를 위해 1 image 4 (particle) run 명령어를 적극 활용한 뒤 디버깅 완료된 코드베이스에서 합리적인 hyperparameter set으로 10 image 실험을 돌리자.
 ⚠️ 주의할 점 (Manifold):
-* Repulsion을 위해 z.grad를 조작할 때, 너무 강하게 밀면 Latent가 학습된 분포 밖(Off-manifold)으로 튕겨 나가 이미지가 깨질 수 있습니다.
-* 초반에는 강하게, 후반($t \to 0$)으로 갈수록 0에 수렴하도록 Decay Schedule을 꼭 넣으세요.
+* Repulsion을 위해 z.grad를 조작할 때, 너무 강하게 밀면 Latent가 학습된 분포 밖(Off-manifold)으로 튕겨 나가 이미지가 깨질 수 있습니다. → scale=50에서 확인됨 (PSNR 6dB로 붕괴)
+* 초반에는 강하게, 후반($t \to 0$)으로 갈수록 0에 수렴하도록 Decay Schedule을 꼭 넣으세요. → sigma_break=1.0으로 step 29에서 OFF
 💡 팁 (Sanity Check):
-* 1 Image 실험 시, 4개의 Latent Vector 간의 **평균 거리(Average Pairwise Distance)**를 매 스텝 로깅하세요.
-* Baseline(독립 실행)보다 이 거리가 확실히 커야 성공입니다.
+* ~~1 Image 실험 시, 4개의 Latent Vector 간의 **평균 거리(Average Pairwise Distance)**를 매 스텝 로깅하세요.~~ → ✅ repulsion.jsonl에 기록됨
+* ~~Baseline(독립 실행)보다 이 거리가 확실히 커야 성공입니다.~~ → ✅ 32 → 71 (2.2배 증가)
+
 
 ### [실험 2] 4 → 2 Pruning (Efficiency Verification)
 * 설정: 4개로 시작 $\to$ $t=200$에서 2개로 압축 $\to$ 끝.
@@ -233,6 +228,16 @@ bash commands_gpu/exp3_2particle.sh --1
 * Pruning 추가 시, VRAM 측정을 **pruning 전/후 두 구간**으로 쪼개야 함.
 * `torch.cuda.reset_peak_memory_stats()`를 pruning 시점에 호출하여 각 구간별 peak를 독립 측정.
 * metrics.json에 `vram.pre_pruning_peak_mb`, `vram.post_pruning_peak_mb` 형태로 기록.
+
+📌 Repulsion OFF 전환 시점 (현재 설정 기준):
+```
+step 28: σ = 1.0482 (ON)
+step 29: σ = 0.9525 (OFF) ← 여기서 처음으로 σ < sigma_break
+```
+* **Repulsion ON**: step 0~28 (29 steps, 58%)
+* **Repulsion OFF**: step 29~49 (21 steps, 42%)
+* 설정: `sigma_max=10`, `sigma_min=0.1`, `num_steps=50`, `timestep=poly-7`, `sigma_break=1.0`
+* → pruning_step=25는 repulsion ON 구간 내에 있음 (σ=1.39)
 
 ### [실험 3] 2-Particle Full Run (Justification for '4')
 * 설정: 처음부터 2개만 띄워서 끝까지($T \to 0$) 유지.
@@ -538,6 +543,65 @@ ReSample 적용 시점: $T=200$ (Low noise) 시점은 이미 이미지가 거의
    - ratio가 **0.3~0.5 이상**이면 → **scale=5**로 내리기
    - ratio가 **0.05 미만**으로 효과 약하면 → **scale=15**로 올리기
 3. 목표: ratio가 **0.1~0.3** 범위, pairwise distance 증가하면서 PSNR 유지
+
+### [실험 1] Sanity Check (2025-12-14 KST) - scale=10 ✅ 성공
+
+#### 결과 요약: Scale=10이 Sweet Spot!
+
+| Scale | Best PSNR | Mean PSNR | Std | Pairwise Dist | step 0 ratio | 판정 |
+|-------|-----------|-----------|-----|---------------|--------------|------|
+| 0.1 | 11.24 | 8.98 | 1.53 | 32.13 | ~0.001 | ❌ 효과 없음 |
+| **10** | **20.66** | 12.83 | 6.12 | **70.70** | **0.0625** | ✅ **Sweet Spot** |
+| 50 | 6.49 | 5.84 | 0.55 | 128.94 | 1.53 | 💀 붕괴 |
+
+#### PSNR 상세 (scale=10)
+- samples: [14.75, 20.66, 8.13, 7.80]
+- **Best: 20.66** (sample 1) - baseline 대비 **+9.42 dB**
+- Std: 6.12 (높은 분산 = 다양한 mode 탐색 성공)
+
+#### Repulsion 로그 분석 (scale=10)
+
+| Step | σ | ratio_scaled_to_score | Pairwise Dist | 해석 |
+|------|-----|----------------------|---------------|------|
+| 0 | 10.0 | **0.0625 (6.25%)** | 21.1 | ✅ 적절한 강도 |
+| 5 | 7.1 | 0.024 (2.4%) | 67.2 | 분리 진행 |
+| 10 | 4.9 | 0.028 (2.8%) | 60.4 | |
+| 25 | 1.5 | 0.016 (1.6%) | 91.3 | 안정화 |
+| 30+ | <1.0 | 0.0 (OFF) | - | sigma_break |
+
+#### 분석
+
+**Good**:
+- **Best PSNR 20.66**: baseline(11.24) 대비 +9.42 dB 향상
+- **ratio 적절**: 0.02~0.06 범위 (score 압도 X, 효과 O)
+- **Pairwise dist 증가**: 32 → 71 (2.2배) - 실제로 입자 분리됨
+- **Sample 다양성**: std=6.12로 높음 (0°/180° 다른 mode 탐색 가능성)
+
+**결론: scale=10 확정 (Sweet Spot)** ✅
+
+step 0 ratio가 **0.0625 (6.25%)** 로 안전+영향 있는 구간(0.05~0.2)에 딱 들어왔고, PSNR이 20.66까지 튄 건 repulsion이 **'제대로'** 문제를 푼 신호.
+
+**scale=5 / 15 추가 튜닝은 우선순위 낮음**:
+- 이미 scale=10이 ratio 적정 + PSNR 크게 개선 + pairwise dist 상승
+- "더 튜닝해서 +0.2dB 얻자" 단계가 아님
+- 지금은 **재현성(10 images)** 과 **2p 안정성(Exp3)** 이 더 중요
+
+**예외: scale=5 비교가 필요한 경우**:
+- Exp1 10 images에서 PSNR이 이미지마다 들쭉날쭉하거나
+- 몇 장에서 붕괴/아티팩트가 보이면
+- → scale=5를 "안전 버전"으로 비교 (15는 오히려 위험 쪽)
+
+
+#### 진행 상황 (2025-12-14)
+
+| 순서 | 실험 | 상태 | 목적 |
+|------|------|------|------|
+| 0 | Exp1 sanity check (4p, scale=10) | ✅ **완료** | scale 튜닝 → **Sweet Spot 확정** |
+| 1 | Exp3 sanity check (2p, scale=10) | 🔄 **실행 중** | N=2 안정성 확인 |
+| 2 | Exp1 10 images (4p, scale=10) | ⏳ 대기 | 재현성 검증 |
+| 3 | Exp3 10 images (2p, scale=10) | ⏳ 대기 | 2p vs 4p 비교 |
+
+- 결과 폴더: `results/exp1_repulsion/imagenet_1img/exp1_sanity_check_scale10/`
 
 ## 프로젝트 기대 결과: 보다 적은 연산으로 비슷하거나 더 좋은 성능을!
 - DAPS에서 Phase Retrieval의 불안정성을 고려하여, 4번의 independent runs을 수행한 뒤 가장 좋은 결과를 선택하여 보고했으니, 우리플젝을 DAPS 4 run이랑 비교했을때 시간xGPU 사용량이 비슷하거나 작으면서 성능이 비슷하거나 높음을 보이면 되는 것!
