@@ -416,7 +416,131 @@ python posterior_sample.py ... sampler.annealing_scheduler_config.num_steps=5 op
 - `results/exp4_optimization/imagenet_1img/exp4_quick_test/`
 
 #### 다음 단계
-- **정식 Sanity Check**: `bash commands_gpu/exp4_optimization.sh --1` (50 step, 500 iter)
+- ~~**정식 Sanity Check**: `bash commands_gpu/exp4_optimization.sh --1` (50 step, 500 iter)~~ → **완료** (아래 참조)
+
+### [실험 4] Sanity Check (2025-12-14 23:28 KST) - Optimization 효과 검증 ✅ 완료
+
+#### 실험 설정
+| Parameter | Value |
+|-----------|-------|
+| Particles | 4 |
+| Repulsion Scale | 10 |
+| Pruning | OFF (-1) |
+| Optimization | ON (500 iter, lr=5e-3) |
+| Images | 1 |
+
+#### 명령어
+```bash
+bash commands_gpu/exp4_optimization.sh --1
+```
+
+#### Exp1 vs Exp4 비교 (1 Image, 동일 시드)
+
+| Metric | Exp1 (no opt) | Exp4 (with opt) | 차이 |
+|--------|---------------|-----------------|------|
+| **Best PSNR** | **20.66 dB** | **18.13 dB** | **-2.53 dB ⚠️** |
+| Mean PSNR | 12.83 dB | 11.67 dB | -1.16 dB |
+| Best SSIM | 0.757 | 0.670 | -0.087 |
+| Best LPIPS | 0.413 | 0.468 | +0.055 (↑worse) |
+| Time | 911초 | 909초 + 174초 | +172초 |
+
+#### 샘플별 PSNR 비교
+
+| Sample | Exp1 | Exp4 | 차이 |
+|--------|------|------|------|
+| 0 | 14.75 | 18.13 | +3.38 ✅ |
+| 1 | **20.66** | 12.29 | **-8.37** ❌ |
+| 2 | 8.13 | 8.00 | -0.13 |
+| 3 | 7.80 | 8.25 | +0.45 |
+
+#### Optimization 상세
+
+| Sample | Init Loss | Final Loss | 감소율 | Accepted |
+|--------|-----------|------------|--------|----------|
+| 0 | 0.00294 | 0.00257 | -12.6% | ✅ |
+| 1 | 0.00293 | 0.00256 | -12.6% | ✅ |
+| 2 | 0.00291 | 0.00255 | -12.4% | ✅ |
+| 3 | 0.00290 | 0.00256 | -11.7% | ✅ |
+
+- **Optimization 시간**: 174초
+- **Termination**: 모두 max_iters (500)
+- **Accepted**: 4/4 (measurement loss 기준 모두 개선)
+
+#### ⚠️ 중요 발견: Optimization이 PSNR을 악화시킴
+
+**Measurement Loss vs PSNR 불일치**:
+- Measurement loss: 모두 ~12% 감소 ✅
+- PSNR: Best가 20.66 → 18.13으로 하락 ❌
+
+**원인 분석**:
+- Phase retrieval에서 measurement는 **amplitude만** 포함
+- Optimization이 amplitude에 과적합 → **phase 정보가 틀어졌을 가능성**
+- 특히 Sample 1: PSNR 20.66 → 12.29 (**-8.37 dB 대폭 하락**)
+
+#### 결론
+
+| 항목 | 평가 |
+|------|------|
+| Optimization 로직 | ✅ 정상 동작 (loss 감소, accept 작동) |
+| **PSNR 개선** | ❌ **오히려 악화 (-2.53 dB)** |
+| 시간 오버헤드 | +174초 (19% 증가) |
+
+**문제**: Phase retrieval에서 measurement loss 최적화가 GT 품질 개선을 보장하지 않음
+
+#### 심층 분석: Measurement Loss vs PSNR 불일치
+
+**샘플별 Optimization 전후 비교** (동일 시드 확인됨):
+
+| Sample | Exp1 PSNR (전) | Exp4 PSNR (후) | Init Loss | Final Loss | Loss↓ | PSNR 변화 |
+|--------|----------------|----------------|-----------|------------|-------|-----------|
+| 0 | 14.75 | 18.13 | 0.002942 | 0.002571 | -12.6% | **+3.38** ✅ |
+| **1** | **20.66** | **12.29** | 0.002933 | 0.002564 | -12.6% | **-8.37** ❌ |
+| 2 | 8.13 | 8.00 | 0.002910 | 0.002555 | -12.2% | -0.13 |
+| 3 | 7.80 | 8.25 | 0.002899 | 0.002564 | -11.6% | +0.45 |
+
+**🔥 핵심 발견: Init Loss가 거의 같은데 PSNR은 완전히 다름!**
+```
+Sample 0: Init Loss 0.002942, PSNR 14.75
+Sample 1: Init Loss 0.002933, PSNR 20.66  ← 거의 같은 loss인데 PSNR 차이 6dB!
+```
+
+**Phase Retrieval의 특성**:
+- Measurement = |Ax| (amplitude만, phase 정보 없음)
+- **같은 amplitude loss라도 phase가 다르면 이미지가 완전히 다름**
+- Sample 1은 "올바른 phase"를 가져서 PSNR 20.66
+- Optimization이 amplitude에 맞추려다가 **올바른 phase를 망가뜨림** → 12.29로 폭락
+
+**결론**: Measurement loss는 Phase Retrieval에서 품질 지표로 부적합. Accept 기준 (`final_loss < init_loss`)이 PSNR 개선을 보장하지 않음.
+
+#### 🤔 의문: ReSample은 왜 잘 됐을까?
+
+ReSample 논문에서는 optimization이 효과적이었는데, 우리 구현에서는 오히려 악화됨.
+
+**가능한 차이점**:
+
+| 항목 | ReSample | 우리 구현 |
+|------|----------|----------|
+| Optimization 시점 | **매 10 step마다** (33회+) | **맨 마지막 1회** |
+| Optimization 종류 | Pixel + Latent 둘 다 | Latent만 |
+| 주요 검증 Task | Inpainting, SR, HDR 등 | **Phase Retrieval** |
+| Phase 문제 | 해당 없음 (measurement에 phase 있음) | **심각** (amplitude만) |
+
+**핵심 차이**: Phase Retrieval은 measurement에 **phase 정보가 없는** 유일한 task!
+- Inpainting: y = Mx (마스크된 픽셀, phase 있음)
+- Super-resolution: y = Dx (다운샘플, phase 있음)
+- **Phase Retrieval: y = |Ax| (amplitude만, phase 없음)** ⚠️
+
+**가설**: ReSample의 optimization은 phase 정보가 있는 task에서는 효과적이지만, phase retrieval에서는 오히려 해로울 수 있음.
+
+#### 개선 방향 검토
+1. **Optimization 비활성화**: Phase retrieval에서는 오히려 해로울 수 있음
+2. **Optimization 강도 조절**: lr 낮추기, max_iters 줄이기 (약하게만 적용)
+3. **매 step마다 optimization**: ReSample 원본처럼 구현 (시간 비용 큼)
+4. **Phase-aware loss**: Amplitude만이 아닌 phase 정보 활용 방안 검토
+5. **10 image 실험에서 통계적 확인**: Exp1 --10 vs Exp4 --10 비교 필요
+
+#### 결과 폴더
+- `results/exp4_optimization/imagenet_1img/exp4_sanity_check/`
 
 #### (참고) ReSample 원본 레포 코드 분석
 
@@ -832,8 +956,10 @@ step 0 ratio가 **0.0625 (6.25%)** 로 안전+영향 있는 구간(0.05~0.2)에 
 | 2 | Exp2 sanity check (4→2, scale=10) | ✅ **완료** | Pruning 검증 | -5.95 dB ⚠️ |
 | 3 | Exp2 10img (4→2, scale=10) | ✅ **완료** | Pruning 통계 | -2.19 dB, 시간 -18%, VRAM -40% |
 | 4 | Exp4 quick test (5 step) | ✅ **완료** | Optimization 로직 검증 | Loss 감소 확인 ✅ |
-| 5 | Exp4 sanity check (50 step) | 🔄 **대기** | Optimization 효과 검증 | - |
-| 6 | Exp1 10 images (4p, scale=10) | ⏳ 대기 | 재현성 검증 | - |
+| 5 | Exp4 sanity check (50 step) | ✅ **완료** | Optimization 효과 검증 | **PSNR -2.53 dB ⚠️** |
+| 6 | Exp1 10 images (4p, scale=10) | 🔄 **실행중** | 재현성 검증 | - |
+| 7 | Exp4 10 images | 🔄 **대기** | Opt 효과 통계 확인 | - |
+| 8 | Exp3 10 images (2p) | 🔄 **대기** | 2p vs 4p 비교 | - |
 
 - Exp1 결과: `results/exp1_repulsion/imagenet_1img/exp1_sanity_check_scale10/`
 - Exp2 결과: `results/exp2_pruning/imagenet_10img/exp2_10img_scale10_prune29/`
