@@ -1182,6 +1182,55 @@ bash commands_gpu/exp2_pruning.sh --10
 #### 결과 폴더
 - `results/exp2_pruning/imagenet_10img/exp2_10img_scale10_prune29/`
 
+### [실험 1] Scale 튜닝 (2025-12-15 KST) ✅ 완료
+
+#### 배경
+- Scale=10에서 PSNR은 baseline보다 +0.12 dB 향상되었으나, SSIM/LPIPS는 오히려 악화
+- Scale=5, 10, 15를 비교하여 optimal scale 확정
+
+#### 전체 비교 (10 Images)
+
+| Scale | **Best PSNR** ↑ | **Best SSIM** ↑ | **Best LPIPS** ↓ | Pairwise Dist | 평가 |
+|-------|-----------------|-----------------|------------------|---------------|------|
+| **0** (Exp0) | 17.50 | **0.550** | **0.558** | ~32 | SSIM/LPIPS 최고 |
+| **5** | 17.21 | 0.524 | 0.596 | 48.4 | ❌ 너무 약함 |
+| **10** | **17.62** | 0.538 | 0.570 | 74.3 | ✅ **Sweet Spot** |
+| **15** | 17.08 | 0.530 | 0.586 | 86.0 | ❌ 너무 강함 |
+
+#### 분석
+
+**Scale=5 (ratio ~1.8%)**
+- Pairwise distance 48.4로 baseline(~32) 대비 약간 증가
+- 하지만 **repulsion 효과가 너무 약해서 baseline보다 모든 metric에서 나쁨**
+- 결론: 효과 없음
+
+**Scale=10 (ratio ~6.3%)** ✅
+- Pairwise distance 74.3으로 baseline 대비 2.3배 증가
+- **PSNR 최고** (17.62 dB)
+- SSIM/LPIPS는 baseline보다 약간 손해 (trade-off)
+- 결론: **Optimal scale 확정**
+
+**Scale=15 (ratio ~9.4%)**
+- Pairwise distance 86.0으로 가장 높음
+- 하지만 **너무 강한 repulsion이 manifold에서 샘플을 밀어냄**
+- 모든 metric에서 scale=10보다 나쁨
+- 결론: 과도함
+
+#### 결론
+
+```
+Scale=5  → 너무 약함 (효과 없음)
+Scale=10 → 적절함 (PSNR 최고, Sweet Spot) ✅
+Scale=15 → 너무 강함 (manifold 이탈)
+```
+
+**Scale=10 확정**: PSNR 기준 최고 성능, SSIM/LPIPS는 baseline 대비 소폭 손해이나 허용 범위
+
+#### 결과 폴더
+- Scale=5: `results/exp1_repulsion/imagenet_1img/exp1_sanity_check_scale5/`, `results/exp1_repulsion/imagenet_10img/exp1_9img_scale5/`
+- Scale=10: `results/exp1_repulsion/imagenet_10img/exp1_10img_scale10/`
+- Scale=15: `results/exp1_repulsion/imagenet_10img/exp1_10img_scale15/`
+
 ### [실험 0/1/3/4] 10 Images 비교 (2025-12-15 KST) ✅ 완료
 
 #### 전체 비교 요약
