@@ -947,7 +947,7 @@ step 0 ratio가 **0.0625 (6.25%)** 로 안전+영향 있는 구간(0.05~0.2)에 
 - → scale=5를 "안전 버전"으로 비교 (15는 오히려 위험 쪽)
 
 
-#### 진행 상황 (2025-12-15 18:30 KST 업데이트)
+#### 진행 상황 (2025-12-16 07:00 KST 업데이트)
 
 | 순서 | 실험 | 상태 | 목적 | 결과 요약 |
 |------|------|------|------|-----------|
@@ -960,8 +960,10 @@ step 0 ratio가 **0.0625 (6.25%)** 로 안전+영향 있는 구간(0.05~0.2)에 
 | 6 | Exp1 10 images (4p, scale=10) | ✅ **완료** | 재현성 검증 | **17.62 dB** (+0.12 vs Exp0) |
 | 7 | Exp4 10 images | ✅ **완료** | Opt 효과 통계 확인 | **17.31 dB** (-0.31 vs Exp1) ⚠️ |
 | 8 | Exp3 10 images (2p) | ✅ **완료** | 2p vs 4p 비교 | **15.98 dB** (-1.64 vs Exp1) |
+| 9 | **Exp1 90 images (4p, scale=10)** | ✅ **완료** | 100img 완성 | **15.53 dB** (90img 평균) |
 
-- Exp1 결과: `results/exp1_repulsion/imagenet_10img/exp1_10img_scale10/`
+- Exp1 결과 (10img): `results/exp1_repulsion/imagenet_10img/exp1_10img_scale10/`
+- Exp1 결과 (90img): `results/exp1_repulsion/imagenet_100img/exp1_90img_scale10/`
 - Exp2 결과: `results/exp2_pruning/imagenet_10img/exp2_10img_scale10_prune29/`
 - Exp3 결과: `results/exp3_2particle/imagenet_10img/exp3_10img_scale10/`
 - Exp4 결과: `results/exp4_optimization/imagenet_10img/exp4_10img/`
@@ -1302,10 +1304,78 @@ Scale=15 → 너무 강함 (manifold 이탈)
 - Exp3: `results/exp3_2particle/imagenet_10img/exp3_10img_scale10/`
 - Exp4: `results/exp4_optimization/imagenet_10img/exp4_10img/`
 
+### [실험 1] 90 Images (2025-12-16 KST) - 100img 완성 ✅
+
+#### 실험 설정
+| Parameter | Value |
+|-----------|-------|
+| Particles | 4 |
+| Repulsion Scale | 10 |
+| Sigma Break | 1.0 |
+| Images | 90 (id 10~99) |
+
+#### 명령어
+```bash
+bash commands_gpu/exp1_repulsion.sh --90
+```
+
+#### Exp1 90img 결과 (images 10-99)
+
+| Metric | Value |
+|--------|-------|
+| **Best PSNR Mean** | **15.53 dB** |
+| Best PSNR Std | 3.88 |
+| Best SSIM Mean | 0.399 |
+| Best LPIPS Mean | 0.633 |
+| Total Time | 82,578초 (22.9시간) |
+| Per Image | 918초 (15.3분) |
+| Peak VRAM | 10,677 MB |
+| Mean Pairwise Distance | 75.6 |
+
+#### Exp1 100img Combined 결과 (10img + 90img) vs 논문 Baseline
+
+| Metric | **LatentDAPS 논문** (4-run) | Exp1 10img | **Exp1 100img** | 차이 (vs 논문) |
+|--------|----------------------------|------------|-----------------|----------------|
+| **Best PSNR** | **20.54 ± 6.41** | 17.62 ± 3.94 | **15.74 ± 3.95** | **-4.80 dB** ⚠️ |
+| **Best SSIM** | **0.612 ± 0.114** | 0.538 ± 0.167 | **0.413 ± 0.189** | **-0.199** ⚠️ |
+| **Best LPIPS** ↓ | **0.361 ± 0.150** | 0.570 ± 0.115 | **0.627 ± 0.130** | **+0.266** ⚠️ |
+| Images | 100 | 10 | 100 | - |
+| Per Image | ~15min | 15.3min | 15.3min | 동일 |
+
+#### PSNR 분포 (100img)
+- **Min**: 7.23 dB
+- **Max**: 28.89 dB
+- **Median**: ~15.5 dB
+
+#### 핵심 발견
+
+**1. 논문 vs Exp1 성능 차이 분석** ⚠️
+- 논문 (LatentDAPS): **20.54 dB**
+- Exp1 (Repulsion): **15.74 dB** (**-4.80 dB**)
+- **차이 원인 분석 필요**:
+  - 논문: 4-particle **independent** (동일 seed, 다른 init noise, repulsion 없음)
+  - Exp1: 4-particle **with repulsion** (동일 seed, 다른 init noise, repulsion 있음)
+  - **가설**: Repulsion이 오히려 성능을 떨어뜨렸을 가능성? 또는 다른 설정 차이?
+  - **TODO**: Exp0 100img (repulsion 없는 baseline)를 돌려서 정확한 비교 필요
+
+**2. 10img vs 90img 성능 차이**
+- 10img (0-9): 17.62 dB → **상위 10개 이미지**
+- 90img (10-99): 15.53 dB → 더 어려운 이미지들 포함
+- 전체 100img: 15.74 dB
+
+**3. Repulsion 효과 (10img 기준)**
+- Exp0 (우리 Baseline): 17.50 dB
+- Exp1 (Repulsion): 17.62 dB (**+0.12 dB**)
+- Repulsion이 같은 조건에서 baseline 대비 약간 향상
+
+#### 결과 폴더
+- 10img: `results/exp1_repulsion/imagenet_10img/exp1_10img_scale10/`
+- 90img: `results/exp1_repulsion/imagenet_100img/exp1_90img_scale10/`
+
 #### 결론 및 다음 단계
 
-1. **Exp1 (4-particle + Repulsion)이 현재 Best Setting**
-   - Baseline 대비 +0.12 dB 향상, 오버헤드 미미
+1. **Exp1 (4-particle + Repulsion) 100img 평가 완료** ✅
+   - Baseline 대비 +0.12 dB 향상 (10img 기준), 오버헤드 미미
 
 2. **Optimization은 Phase Retrieval에서 비활성화**
    - 다른 task(Inpainting, SR 등)에서는 유효할 수 있음
@@ -1314,8 +1384,8 @@ Scale=15 → 너무 강함 (manifold 이탈)
    - 현재 Exp2의 measurement loss 기준 pruning은 성능 손실 큼
    - Diversity-aware pruning 또는 더 늦은 시점(step 35~40) 검토
 
-4. **Exp1으로 90 images 추가 실험 진행 예정**
-   - 100 images 전체 평가로 논문 table 완성
+4. ~~**Exp1으로 90 images 추가 실험 진행 예정**~~ → ✅ **완료**
+   - 100 images 전체 평가 완료
 
 ## 프로젝트 기대 결과: 보다 적은 연산으로 비슷하거나 더 좋은 성능을!
 - DAPS에서 Phase Retrieval의 불안정성을 고려하여, 4번의 independent runs을 수행한 뒤 가장 좋은 결과를 선택하여 보고했으니, 우리플젝을 DAPS 4 run이랑 비교했을때 시간xGPU 사용량이 비슷하거나 작으면서 성능이 비슷하거나 높음을 보이면 되는 것!
