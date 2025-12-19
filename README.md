@@ -170,11 +170,13 @@ Counterintuitively, 4 independent runs (Exp0) performed comparably to 4 repulsiv
 
 ## Data & Results
 
+All experiment data is available at: [Google Drive](https://drive.google.com/drive/folders/1gsKhgytUPhjzFLcqWzY7tCDv6jL1UjNs?usp=sharing)
+
 | File | Size | Description |
 |------|------|-------------|
-| [`every_combined_and_ldm.zip`](https://drive.google.com/drive/dummy-link-1) | 14.7 GB | Part 1: General Tasks (Original Experiments) |
-| [`hmc_resample_independent_1217.zip`](https://drive.google.com/drive/dummy-link-2) | 1.0 GB | Part 1: General Tasks (Additional Experiments) |
-| [`diffusionpr1216.zip`](https://drive.google.com/drive/dummy-link-3) | 7.2 GB | Part 2: Phase Retrieval Exploration |
+| `every_combined_and_ldm.zip` | 14.7 GB | Part 1: General Tasks (Original Experiments) |
+| `hmc_resample_independent_1217.zip` | 1.0 GB | Part 1: General Tasks (Additional Experiments) |
+| `diffusionpr1216.zip` | 7.2 GB | Part 2: Phase Retrieval Exploration |
 
 ---
 
