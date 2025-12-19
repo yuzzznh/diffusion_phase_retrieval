@@ -182,7 +182,7 @@ Counterintuitively, 4 independent runs (Exp0) performed comparably to 4 repulsiv
 
 - **DAPS**: Zhang et al., "Improving Diffusion Inverse Problem Solving with Decoupled Noise Annealing" (CVPR 2025 Oral)
 - **ReSample**: Song et al., "Solving Inverse Problems with Latent Diffusion Models via Hard Data Consistency" (ICLR 2024)
-- **RLSD**: Particle-guided diffusion for diverse sample generation
+- **RLSD**: Zilberstein et al., "Repulsive Latent Score Distillation for Solving Inverse Problems" (arXiv:2406.16683)
 
 ---
 
