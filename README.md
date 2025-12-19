@@ -117,7 +117,7 @@ We implemented SVGD-style repulsion using DINO-ViT features:
 
 | Metric | 10 Images | 90 Images | Combined 100 |
 |--------|-----------|-----------|--------------|
-| Best PSNR | 17.62 dB | 15.53 dB | 15.74 dB |
+| Best PSNR | 17.62 dB | 15.53 dB | - |
 
 *Source: `DAPS/PROJECT.md`*
 
@@ -170,8 +170,11 @@ Counterintuitively, 4 independent runs (Exp0) performed comparably to 4 repulsiv
 
 ## Data & Results
 
-- **General Tasks Results**: [Google Drive Link - General Results](https://drive.google.com/drive/dummy-link-1)
-- **Phase Retrieval Exploration**: [Google Drive Link - Phase Retrieval](https://drive.google.com/drive/dummy-link-2)
+| File | Size | Description |
+|------|------|-------------|
+| [`every_combined_and_ldm.zip`](https://drive.google.com/drive/dummy-link-1) | 14.7 GB | Part 1: General Tasks (Original Experiments) |
+| [`hmc_resample_independent_1217.zip`](https://drive.google.com/drive/dummy-link-2) | 1.0 GB | Part 1: General Tasks (Additional Experiments) |
+| [`diffusionpr1216.zip`](https://drive.google.com/drive/dummy-link-3) | 7.2 GB | Part 2: Phase Retrieval Exploration |
 
 ---
 
