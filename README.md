@@ -20,19 +20,21 @@ This repository contains two integrated codebases:
 
 ```
 diffusion_phase_retrieval/
-├── DAPS/                           # Part 2: Phase Retrieval Exploration (Main Focus)
+├── Diffusion Project Proposal (Yujin Kim).pdf    # Project proposal document
+├── Diffusion Project Presentation (Yujin Kim).pdf # Project presentation slides
+│
+├── phase_retrieval_experiments/    # Part 2: Phase Retrieval Exploration (Main Focus)
 │   ├── posterior_sample.py         # Main inference script
 │   ├── sampler.py                  # LatentDAPS + Repulsion + Optimization
 │   ├── repulsion.py                # SVGD-style particle repulsion (DINO features)
 │   ├── cores/                      # MCMC, schedulers, trajectory
 │   ├── commands_gpu/               # Experiment shell scripts (exp0~exp5)
 │   ├── results/                    # Experiment outputs
-│   └── PROJECT.md                  # Detailed experiment log & analysis
+│   └── phase_retrieval_log.md      # Detailed experiment log & analysis
 │
 └── project_resample_daps/          # Part 1: General Inverse Tasks
-    ├── DAPS/                       # LatentDAPS codebase
-    ├── resample/                   # ReSample codebase
-    └── CLAUDE.md                   # Experiment notes & results
+    ├── all_tasks_experiments/      # LatentDAPS codebase
+    └── all_tasks_log.md            # Experiment notes & results
 ```
 
 ---
@@ -66,7 +68,7 @@ Experiments were conducted on FFHQ and ImageNet (100 images each) across multipl
 | **Nonlinear Blur (FFHQ)** | LatentDAPS + ReSample(5) | 30.03 | 0.848 | 0.196 |
 | **Nonlinear Blur (ImageNet)** | LatentDAPS + ReSample(5) | 27.13 | 0.750 | 0.252 |
 
-*Source: `project_resample_daps/CLAUDE.md`*
+*Source: `project_resample_daps/all_tasks_log.md`*
 
 ### Key Findings
 
@@ -119,7 +121,7 @@ We implemented SVGD-style repulsion using DINO-ViT features:
 |--------|-----------|-----------|--------------|
 | Best PSNR | 17.62 dB | 15.53 dB | - |
 
-*Source: `DAPS/PROJECT.md`*
+*Source: `phase_retrieval_experiments/phase_retrieval_log.md`*
 
 ### Critical Findings
 
