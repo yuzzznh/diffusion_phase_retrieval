@@ -1,0 +1,70 @@
+name: Integrated_LDM
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  # Base System
+  - python=3.10
+  - pip=23.3
+  - git
+  - ninja
+  
+  # PyTorch 2.3.0 (CUDA 12.1)
+  - pytorch=2.3.0
+  - torchvision=0.18.0
+  - torchaudio=2.3.0
+  - pytorch-cuda=12.1
+  
+  # Common Utils (버전 고정이 중요)
+  - numpy=1.24.4
+  - matplotlib
+  - imageio
+  - scikit-image=0.21.0  # Scipy 1.10과 호환되는 마지막 버전
+  - scipy=1.10.1
+  - tqdm
+  - pyyaml
+  - requests
+  - pandas
+  - protobuf
+  
+  # Pip dependencies
+  - pip:
+    # --- Critical Fixes (충돌 해결된 버전) ---
+    - opencv-python-headless<4.8
+    - typing-extensions>=4.14.1
+
+    # --- ReSample Core Dependencies ---
+    - omegaconf==2.3.0
+    - einops
+    - test-tube>=0.7.5
+    - streamlit>=0.73.1
+    - setuptools
+    
+    # --- DAPS & HuggingFace Modern Stack ---
+    - transformers==4.46.3
+    - diffusers==0.32.2
+    - huggingface-hub
+    - safetensors
+    - tokenizers
+    - accelerate
+    
+    # --- Legacy Compatibility ---
+    - pytorch-lightning==2.0.9
+    - torchmetrics
+    
+    # --- Specific Libs ---
+    - kornia==0.7.3
+    - torchdiffeq==0.2.5
+    - wandb
+    - triton==2.3.0
+    - antlr4-python3-runtime==4.9.3
+    - ftfy
+    - regex
+    
+    # --- Installing CLIP directly from source ---
+    - git+https://github.com/openai/CLIP.git@main#egg=clip
+    
+    # --- ReSample taming-transformers ---
+    - taming-transformers-rom1504
